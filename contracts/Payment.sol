@@ -108,11 +108,11 @@ contract PaymentContract {
         require(registeredRestaurants[restaurant], "Restaurant not registered");
         require(usdtAmount > 0, "Amount must be greater than zero");
 
+        // Calculate custom ratio BEFORE updating volumes
+        uint256 customRatio = _calculateCustomRatio(restaurant);
+
         // Update transaction volumes
         _updateVolumes(restaurant, usdtAmount);
-
-        // Calculate custom ratio
-        uint256 customRatio = _calculateCustomRatio(restaurant);
 
         // Calculate adjusted amount (using SafeMath implicitly since ^0.8.0)
         uint256 adjustedAmount = (usdtAmount * customRatio) / 1e18;
