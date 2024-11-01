@@ -225,20 +225,202 @@ contract("PaymentContract", accounts => {
         });
 
         it("6.1 Should reset ratio after time window", async () => {
-            // Make initial payments
-            await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            // Make initial payments to reduce ratio
+            for(let i = 0; i < 5; i++) {
+                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            }
+            
+            // Get ratio after multiple payments
+            const beforeResult = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            const beforeRatio = beforeResult.logs.find(log => log.event === 'PaymentProcessed').args.customRatio;
+            
+            // Verify ratio has decreased from base due to volume
+            expect(beforeRatio).to.be.bignumber.lt(BASE_RATIO);
 
             // Advance time beyond time window
             await time.increase(TIME_WINDOW.add(new BN('1')));
 
+            // Make new payment in new time window
+            const afterResult = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            const afterEvent = afterResult.logs.find(log => log.event === 'PaymentProcessed');
+
+            // After time window, ratio should be back to BASE_RATIO since old data is cleared
+            expect(afterEvent.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
+            expect(afterEvent.args.adjustedAmount).to.be.bignumber.equal(paymentAmount);
+        });
+    });
+
+    describe("7. Edge Cases and Error Handling", () => {
+        const paymentAmount = new BN('1000000'); // 1 USDT
+
+        beforeEach(async () => {
+            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            // Transfer a reasonable amount of USDT to user1
+            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
+            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 }); // 10 USDT approval
+        });
+
+        it("7.1 Should handle larger payment amounts", async () => {
+            const largeAmount = new BN('5000000'); // 5 USDT
+            const result = await paymentContract.pay(restaurant1, largeAmount, { from: user1 });
+            
+            expectEvent(result, 'PaymentProcessed', {
+                user: user1,
+                restaurant: restaurant1,
+                originalAmount: largeAmount
+            });
+        });
+
+        it("7.2 Should handle multiple rapid payments within same block", async () => {
+            const payments = [];
+            for(let i = 0; i < 5; i++) {
+                payments.push(paymentContract.pay(restaurant1, paymentAmount, { from: user1 }));
+            }
+            
+            const results = await Promise.all(payments);
+            
+            // Verify all payments were processed
+            results.forEach(result => {
+                expectEvent(result, 'PaymentProcessed');
+            });
+        });
+
+        it("7.3 Should handle payments at minimum ratio threshold", async () => {
+            // Make multiple payments to reach minimum ratio
+            for(let i = 0; i < 10; i++) {
+                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            }
+            
+            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            const event = result.logs.find(log => log.event === 'PaymentProcessed');
+            
+            // Verify ratio doesn't go below minimum
+            expect(event.args.customRatio).to.be.bignumber.gte(MIN_RATIO);
+        });
+
+        it("7.4 Should handle concurrent payments from multiple users", async () => {
+            // Setup second user
+            await mockUSDT.transfer(user2, new BN('10000000'), { from: owner });
+            await mockUSDT.approve(paymentContract.address, new BN('100000000'), { from: user2 });
+            
+            // Make concurrent payments
+            const [result1, result2] = await Promise.all([
+                paymentContract.pay(restaurant1, paymentAmount, { from: user1 }),
+                paymentContract.pay(restaurant1, paymentAmount, { from: user2 })
+            ]);
+            
+            expectEvent(result1, 'PaymentProcessed');
+            expectEvent(result2, 'PaymentProcessed');
+        });
+    });
+
+    describe("8. Volume Data Management", () => {
+        const paymentAmount = new BN('100000'); // 0.1 USDT (reduced for multiple transactions)
+
+        beforeEach(async () => {
+            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
+            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 });
+        });
+
+        it("8.1 Should properly clean up old volume data", async () => {
+            // Make initial payment
+            await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            
+            // Advance time beyond window
+            await time.increase(TIME_WINDOW.add(new BN('1')));
+            
             // Make new payment
             const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
             const event = result.logs.find(log => log.event === 'PaymentProcessed');
-
-            // After time window, ratio should be back to BASE_RATIO
+            
+            // Should use base ratio as old data is cleaned
             expect(event.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
-            expect(event.args.adjustedAmount).to.be.bignumber.equal(paymentAmount);
+        });
+
+        it("8.2 Should handle multiple transactions within time window", async () => {
+            // Make several transactions within time window (reduced from 50 to 20)
+            for(let i = 0; i < 20; i++) {
+                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            }
+            
+            // Verify contract can still process payments
+            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
+            expectEvent(result, 'PaymentProcessed');
+        });
+    });
+
+    describe("9. Restaurant Management Edge Cases", () => {
+        it("9.1 Should handle re-registering removed restaurant", async () => {
+            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            await paymentContract.removeRestaurant(restaurant1, { from: owner });
+            
+            // Re-register
+            const result = await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            expectEvent(result, 'RestaurantRegistered', {
+                restaurant: restaurant1
+            });
+        });
+
+        it("9.2 Should maintain correct restaurant count through multiple operations", async () => {
+            // Register multiple restaurants
+            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            await paymentContract.registerRestaurant(restaurant2, { from: owner });
+            
+            // Remove one
+            await paymentContract.removeRestaurant(restaurant1, { from: owner });
+            
+            // Get restaurants
+            const restaurants = await paymentContract.getRestaurants();
+            expect(restaurants.length).to.equal(1);
+            expect(restaurants[0]).to.equal(restaurant2);
+        });
+    });
+
+    describe("10. Ratio Calculation Edge Cases", () => {
+        beforeEach(async () => {
+            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
+            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 });
+        });
+
+        it("10.1 Should handle ratio calculation with zero total volume", async () => {
+            const result = await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
+            const event = result.logs.find(log => log.event === 'PaymentProcessed');
+            expect(event.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
+        });
+
+        it("10.2 Should handle extremely small payment amounts", async () => {
+            const smallAmount = new BN('1'); // 0.000001 USDT
+            const result = await paymentContract.pay(restaurant1, smallAmount, { from: user1 });
+            
+            expectEvent(result, 'PaymentProcessed', {
+                originalAmount: smallAmount
+            });
+        });
+
+        it("10.3 Should reset to base ratio in new time window", async () => {
+            // Make payments to affect ratio in first window
+            for(let i = 0; i < 3; i++) {
+                await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
+            }
+            
+            // Get ratio at end of first window
+            const firstWindowResult = await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
+            const firstWindowRatio = firstWindowResult.logs.find(log => log.event === 'PaymentProcessed').args.customRatio;
+            
+            // Verify ratio decreased in first window
+            expect(firstWindowRatio).to.be.bignumber.lt(BASE_RATIO);
+            
+            // Advance time to next window
+            await time.increase(TIME_WINDOW.add(new BN('1')));
+            
+            // Make payment in new window
+            const newWindowResult = await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
+            const newWindowRatio = newWindowResult.logs.find(log => log.event === 'PaymentProcessed').args.customRatio;
+            
+            // Verify ratio resets to BASE_RATIO in new window
+            expect(newWindowRatio).to.be.bignumber.equal(BASE_RATIO);
         });
     });
 }); 
