@@ -108,13 +108,17 @@ contract PaymentContract {
         require(registeredRestaurants[restaurant], "Restaurant not registered");
         require(usdtAmount > 0, "Amount must be greater than zero");
 
-        // Calculate custom ratio BEFORE updating volumes
+        // First clean up old data
+        _cleanupOldData(restaurantVolumes[restaurant]);
+        _cleanupOldData(totalVolumes);
+
+        // Then calculate custom ratio based on cleaned data
         uint256 customRatio = _calculateCustomRatio(restaurant);
 
-        // Update transaction volumes
+        // Only after ratio calculation, update volumes
         _updateVolumes(restaurant, usdtAmount);
 
-        // Calculate adjusted amount (using SafeMath implicitly since ^0.8.0)
+        // Calculate adjusted amount
         uint256 adjustedAmount = (usdtAmount * customRatio) / 1e18;
 
         // Transfer USDT from user to restaurant
@@ -147,12 +151,34 @@ contract PaymentContract {
     // Internal function to clean up old volume data
     function _cleanupOldData(VolumeData[] storage volumes) internal {
         uint256 cutoffTime = block.timestamp - timeWindow;
-        while (volumes.length > 0 && volumes[0].timestamp < cutoffTime) {
-            // Remove the oldest entry
-            for (uint256 i = 0; i < volumes.length - 1; i++) {
-                volumes[i] = volumes[i + 1];
+        
+        // Count how many entries to remove
+        uint256 entriesToRemove = 0;
+        for (uint256 i = 0; i < volumes.length; i++) {
+            if (volumes[i].timestamp < cutoffTime) {
+                entriesToRemove++;
+            } else {
+                break; // Since entries are ordered by time, we can stop here
             }
-            volumes.pop();
+        }
+        
+        // Remove old entries
+        if (entriesToRemove > 0) {
+            if (entriesToRemove == volumes.length) {
+                // If all entries are old, clear the array
+                while (volumes.length > 0) {
+                    volumes.pop();
+                }
+            } else {
+                // Remove specific number of old entries
+                for (uint256 i = 0; i < volumes.length - entriesToRemove; i++) {
+                    volumes[i] = volumes[i + entriesToRemove];
+                }
+                // Reduce array length
+                for (uint256 i = 0; i < entriesToRemove; i++) {
+                    volumes.pop();
+                }
+            }
         }
     }
 
