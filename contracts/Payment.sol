@@ -11,22 +11,26 @@ contract PaymentContract {
     IERC20 public usdtToken;
     address public owner;
 
-    // Mapping to track registered restaurants
-    mapping(address => bool) public registeredRestaurants;
-    
-    // Array to keep track of all restaurant addresses
+    // Struct to store restaurant details with Google Map ID
+    struct RestaurantInfo {
+        string googlemap_id;
+        uint256 customRatio;
+    }
+
+    // Mapping to track registered restaurants and Google Map ID pairs
+    mapping(address => RestaurantInfo) public restaurants;
     address[] public restaurantAddresses;
 
     // Base Ratio (BR), Decay Factor (DF), Minimum Ratio (MR)
-    uint256 public baseRatio;    // e.g., 1 * 1e18 (1.00)
-    uint256 public decayFactor;  // e.g., 0.5 * 1e18 (0.50)
-    uint256 public minRatio;     // e.g., 0.90 * 1e18 (0.90)
+    uint256 public baseRatio; // e.g., 1 * 1e18 (1.00)
+    uint256 public decayFactor; // e.g., 0.5 * 1e18 (0.50)
+    uint256 public minRatio; // e.g., 0.90 * 1e18 (0.90)
 
     // Time window for transaction volumes (e.g., 1 hour)
-    uint256 public timeWindow;   // In seconds, e.g., 3600 for 1 hour
+    uint256 public timeWindow; // In seconds, e.g., 3600 for 1 hour
 
     // Events for restaurant management
-    event RestaurantRegistered(address indexed restaurant);
+    event RestaurantRegistered(address indexed restaurant, string googlemap_id);
     event RestaurantRemoved(address indexed restaurant);
 
     event PaymentProcessed(
@@ -37,15 +41,12 @@ contract PaymentContract {
         uint256 customRatio
     );
 
-    // Add this struct definition after the events and before the constructor
     struct VolumeData {
         uint256 amount;
         uint256 timestamp;
     }
 
-    // Add this mapping for restaurant volumes
     mapping(address => VolumeData[]) private restaurantVolumes;
-    // Add this array for total volumes
     VolumeData[] private totalVolumes;
 
     modifier onlyOwner() {
@@ -68,113 +69,155 @@ contract PaymentContract {
         timeWindow = _timeWindow;
     }
 
-    // Function to register a new restaurant
-    function registerRestaurant(address restaurant) external onlyOwner {
-        require(restaurant != address(0), "Invalid restaurant address");
-        require(!registeredRestaurants[restaurant], "Restaurant already registered");
-        
-        registeredRestaurants[restaurant] = true;
-        restaurantAddresses.push(restaurant);
-        
-        emit RestaurantRegistered(restaurant);
+    // Function to register a new restaurant with Google Map ID
+    function registerRestaurant(string memory googlemap_id) external {
+        require(msg.sender != address(0), "Invalid restaurant address");
+        require(
+            bytes(restaurants[msg.sender].googlemap_id).length == 0,
+            "Restaurant already registered"
+        );
+
+        restaurants[msg.sender] = RestaurantInfo({
+            googlemap_id: googlemap_id,
+            customRatio: baseRatio
+        });
+        restaurantAddresses.push(msg.sender);
+
+        emit RestaurantRegistered(msg.sender, googlemap_id);
     }
 
     // Function to remove a restaurant
     function removeRestaurant(address restaurant) external onlyOwner {
-        require(registeredRestaurants[restaurant], "Restaurant not registered");
-        
-        registeredRestaurants[restaurant] = false;
-        
-        // Remove from array (find and replace with last element, then pop)
+        require(
+            bytes(restaurants[restaurant].googlemap_id).length != 0,
+            "Restaurant not registered"
+        );
+
+        delete restaurants[restaurant];
+
         for (uint i = 0; i < restaurantAddresses.length; i++) {
             if (restaurantAddresses[i] == restaurant) {
-                restaurantAddresses[i] = restaurantAddresses[restaurantAddresses.length - 1];
+                restaurantAddresses[i] = restaurantAddresses[
+                    restaurantAddresses.length - 1
+                ];
                 restaurantAddresses.pop();
                 break;
             }
         }
-        
+
         emit RestaurantRemoved(restaurant);
     }
 
-    // Function to get all registered restaurants
-    function getRestaurants() external view returns (address[] memory) {
-        return restaurantAddresses;
+    // Function to get restaurants sorted by custom ratio in ascending order
+    function getRestaurantsByRatio() external view returns (string[] memory) {
+        uint256 length = restaurantAddresses.length;
+        RestaurantInfo[] memory sortedRestaurants = new RestaurantInfo[](
+            length
+        );
+        address[] memory sortedAddresses = new address[](length);
+
+        for (uint i = 0; i < length; i++) {
+            sortedRestaurants[i] = restaurants[restaurantAddresses[i]];
+            sortedAddresses[i] = restaurantAddresses[i];
+        }
+
+        for (uint i = 0; i < length; i++) {
+            for (uint j = i + 1; j < length; j++) {
+                if (
+                    _calculateCustomRatio(sortedAddresses[i]) >
+                    _calculateCustomRatio(sortedAddresses[j])
+                ) {
+                    (sortedRestaurants[i], sortedRestaurants[j]) = (
+                        sortedRestaurants[j],
+                        sortedRestaurants[i]
+                    );
+                    (sortedAddresses[i], sortedAddresses[j]) = (
+                        sortedAddresses[j],
+                        sortedAddresses[i]
+                    );
+                }
+            }
+        }
+
+        string[] memory results = new string[](length);
+        for (uint i = 0; i < length; i++) {
+            results[i] = string(
+                abi.encodePacked(
+                    "Restaurant Address: ",
+                    toAsciiString(sortedAddresses[i]),
+                    ", Google Map ID: ",
+                    sortedRestaurants[i].googlemap_id,
+                    ", Custom Ratio: ",
+                    uintToString(_calculateCustomRatio(sortedAddresses[i]))
+                )
+            );
+        }
+
+        return results;
     }
 
     // Function to process payment
     function pay(address restaurant, uint256 usdtAmount) external {
         require(restaurant != address(0), "Invalid restaurant address");
-        require(registeredRestaurants[restaurant], "Restaurant not registered");
+        require(
+            bytes(restaurants[restaurant].googlemap_id).length != 0,
+            "Restaurant not registered"
+        );
         require(usdtAmount > 0, "Amount must be greater than zero");
 
-        // First clean up old data
         _cleanupOldData(restaurantVolumes[restaurant]);
         _cleanupOldData(totalVolumes);
 
-        // Then calculate custom ratio based on cleaned data
         uint256 customRatio = _calculateCustomRatio(restaurant);
-
-        // Only after ratio calculation, update volumes
         _updateVolumes(restaurant, usdtAmount);
 
-        // Calculate adjusted amount
         uint256 adjustedAmount = (usdtAmount * customRatio) / 1e18;
-
-        // Transfer USDT from user to restaurant
         usdtToken.safeTransferFrom(msg.sender, restaurant, adjustedAmount);
 
-        emit PaymentProcessed(msg.sender, restaurant, usdtAmount, adjustedAmount, customRatio);
+        emit PaymentProcessed(
+            msg.sender,
+            restaurant,
+            usdtAmount,
+            adjustedAmount,
+            customRatio
+        );
     }
 
-    // Internal function to update transaction volumes
     function _updateVolumes(address restaurant, uint256 usdtAmount) internal {
         uint256 currentTime = block.timestamp;
 
-        // Add restaurant volume data
-        restaurantVolumes[restaurant].push(VolumeData({
-            amount: usdtAmount,
-            timestamp: currentTime
-        }));
+        restaurantVolumes[restaurant].push(
+            VolumeData({amount: usdtAmount, timestamp: currentTime})
+        );
+        totalVolumes.push(
+            VolumeData({amount: usdtAmount, timestamp: currentTime})
+        );
 
-        // Add total volume data
-        totalVolumes.push(VolumeData({
-            amount: usdtAmount,
-            timestamp: currentTime
-        }));
-
-        // Clean up old data outside the time window
         _cleanupOldData(restaurantVolumes[restaurant]);
         _cleanupOldData(totalVolumes);
     }
 
-    // Internal function to clean up old volume data
     function _cleanupOldData(VolumeData[] storage volumes) internal {
         uint256 cutoffTime = block.timestamp - timeWindow;
-        
-        // Count how many entries to remove
+
         uint256 entriesToRemove = 0;
         for (uint256 i = 0; i < volumes.length; i++) {
             if (volumes[i].timestamp < cutoffTime) {
                 entriesToRemove++;
             } else {
-                break; // Since entries are ordered by time, we can stop here
+                break;
             }
         }
-        
-        // Remove old entries
+
         if (entriesToRemove > 0) {
             if (entriesToRemove == volumes.length) {
-                // If all entries are old, clear the array
                 while (volumes.length > 0) {
                     volumes.pop();
                 }
             } else {
-                // Remove specific number of old entries
                 for (uint256 i = 0; i < volumes.length - entriesToRemove; i++) {
                     volumes[i] = volumes[i + entriesToRemove];
                 }
-                // Reduce array length
                 for (uint256 i = 0; i < entriesToRemove; i++) {
                     volumes.pop();
                 }
@@ -182,25 +225,21 @@ contract PaymentContract {
         }
     }
 
-    // Internal function to calculate custom ratio
-    function _calculateCustomRatio(address restaurant) internal view returns (uint256) {
+    function _calculateCustomRatio(
+        address restaurant
+    ) public view returns (uint256) {
         uint256 TT_a = _getTotalVolume(restaurantVolumes[restaurant]);
         uint256 TT_total = _getTotalVolume(totalVolumes);
 
-        // For first payment or if there are no transactions within time window, return base ratio
         if (TT_total == 0 || TT_a == 0) {
             return baseRatio;
         }
 
-        // Calculate relative share (scaled by 1e18)
         uint256 relativeShare = (TT_a * 1e18) / TT_total;
-        
-        // Calculate decay (scaled appropriately)
         uint256 decay = (relativeShare * decayFactor) / 1e18;
-        
-        // Calculate final ratio
+
         uint256 currentRatio = baseRatio;
-        
+
         if (decay > 0) {
             uint256 reduction = (baseRatio * decay) / 1e18;
             if (reduction >= baseRatio) {
@@ -209,16 +248,52 @@ contract PaymentContract {
             currentRatio = baseRatio - reduction;
         }
 
-        // Ensure we don't go below minimum ratio
         return currentRatio < minRatio ? minRatio : currentRatio;
     }
 
-    // Internal function to get total volume from an array of VolumeData
-    function _getTotalVolume(VolumeData[] storage volumes) internal view returns (uint256) {
+    function _getTotalVolume(
+        VolumeData[] storage volumes
+    ) internal view returns (uint256) {
         uint256 total = 0;
         for (uint256 i = 0; i < volumes.length; i++) {
             total += volumes[i].amount;
         }
         return total;
+    }
+
+    // Helper function to convert uint to string
+    function uintToString(uint v) internal pure returns (string memory) {
+        uint maxlength = 100;
+        bytes memory reversed = new bytes(maxlength);
+        uint i = 0;
+        while (v != 0) {
+            uint remainder = v % 10;
+            v = v / 10;
+            reversed[i++] = bytes1(uint8(48 + remainder));
+        }
+        bytes memory s = new bytes(i);
+        for (uint j = 0; j < i; j++) {
+            s[j] = reversed[i - j - 1];
+        }
+        string memory str = string(s);
+        return str;
+    }
+
+    // Helper function to convert address to string
+    function toAsciiString(address x) internal pure returns (string memory) {
+        bytes memory s = new bytes(40);
+        for (uint i = 0; i < 20; i++) {
+            bytes1 b = bytes1(uint8(uint(uint160(x)) / (2 ** (8 * (19 - i)))));
+            bytes1 hi = bytes1(uint8(b) / 16);
+            bytes1 lo = bytes1(uint8(b) - 16 * uint8(hi));
+            s[2 * i] = char(hi);
+            s[2 * i + 1] = char(lo);
+        }
+        return string(s);
+    }
+
+    function char(bytes1 b) internal pure returns (bytes1 c) {
+        if (uint8(b) < 10) return bytes1(uint8(b) + 0x30);
+        else return bytes1(uint8(b) + 0x57);
     }
 }
