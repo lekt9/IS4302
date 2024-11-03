@@ -1,36 +1,85 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Restaurant Order System
 
-## Getting Started
+A modern web application for restaurant ordering built with Next.js 14, featuring real-time updates, interactive UI, and seamless payment integration.
 
-First, run the development server:
+## 🌟 Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Restaurant Discovery**: Browse nearby restaurants with real-time availability
+- **Dynamic Menu**: Interactive menu with real-time price calculations
+- **Smart Discounts**: Automatic discount application based on order value
+- **Responsive Design**: Optimized for both desktop and mobile devices
+- **Real-time Updates**: Live order status tracking
+- **Smooth Animations**: Enhanced user experience with subtle animations
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 🚀 Tech Stack
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **Framework**: Next.js 14 (App Router)
+- **Styling**: Tailwind CSS
+- **State Management**: React Hooks
+- **Maps Integration**: Google Maps API
+- **UI Components**: Custom components with Tailwind
+- **Icons**: React Icons
+- **Toast Notifications**: React Hot Toast
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 📦 Installation
 
-## Learn More
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/restaurant-order-system.git
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+2. Install dependencies:
+   ```bash
+   cd restaurant-order-system
+   npm install
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+3. Set up environment variables:
+   ```bash
+   cp .env.example .env.local
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+4. Start the development server:
+   ```bash
+   npm run dev
+   ```
 
-## Deploy on Vercel
+## 🔧 Configuration
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Create a `.env.local` file in the root directory with the following variables:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+env
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+
+
+## 📱 Usage
+
+1. Open `http://localhost:3000` in your browser
+2. Browse available restaurants
+3. Select items from the menu
+4. Place your order
+5. Track order status in real-time
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 👥 Authors
+
+- Your Name - Initial work - [YourGitHub](https://github.com/your-username)
+
+## 🙏 Acknowledgments
+
+- Thanks to all contributors who have helped this project grow
+- Inspired by modern food delivery platforms
+- Built with ❤️ using Next.js and React
