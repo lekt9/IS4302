@@ -69,15 +69,47 @@ export default function LocationSettingsPage() {
     }
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     const station = mrtLines[selectedLine as keyof typeof mrtLines].find(s => s.name === selectedStation);
     if (station) {
-      localStorage.setItem('userLocation', JSON.stringify({
+      // Save location to localStorage
+      const userLocation = {
         line: selectedLine,
         station: station.name,
         coordinates: station.location
-      }));
-      router.push('/home');
+      };
+      localStorage.setItem('userLocation', JSON.stringify(userLocation));
+
+      try {
+        const requestBody = {
+          latitude: station.location.lat,
+          longitude: station.location.lng,
+          radius: 1000, // 1km radius
+          type: 'restaurant'
+        };
+        
+        console.log('Sending POST request with data:', requestBody);
+        
+        const response = await fetch('/api/places/nearby', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        const data = await response.json();
+        console.log('Received response:', data);
+        
+        // Store restaurants data in localStorage
+        localStorage.setItem('nearbyRestaurants', JSON.stringify(data));
+        
+        // Navigate to home page
+        router.push('/home');
+      } catch (error) {
+        console.error('Error fetching nearby restaurants:', error);
+        // You might want to add error handling UI here
+      }
     }
   };
 
