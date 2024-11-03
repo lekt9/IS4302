@@ -6,14 +6,21 @@ import Image from 'next/image';
 interface Restaurant {
   id: string;
   name: string;
-  image: string;
   rating: number;
+  userRatingsTotal: number;
   vicinity: string;
-  photos?: { photo_reference: string }[];
-  price_level?: number;
-  opening_hours?: {
-    open_now: boolean;
+  priceLevel?: number;
+  photos: {
+    photoReference: string;
+    height: number;
+    width: number;
+  }[];
+  location: {
+    lat: number;
+    lng: number;
   };
+  discountRate: number;
+  trafficLevel: 'Low' | 'Medium' | 'High';
 }
 
 export default function HomePage() {
@@ -22,105 +29,82 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchRestaurants = async () => {
-      try {
-        // 从 localStorage 获取用户偏好
-        const locationData = JSON.parse(localStorage.getItem('userLocation') || '{}');
-        const coordinates = locationData.coordinates;
-        
-        if (!coordinates) {
-          router.push('/preferences');
-          return;
-        }
+    const storedData = localStorage.getItem('nearbyRestaurants');
+    if (storedData) {
+      const { restaurants } = JSON.parse(storedData);
+      const enhancedRestaurants = restaurants.map((restaurant: Restaurant) => ({
+        ...restaurant,
+        discountRate: Math.floor(Math.random() * 31), // Random discount between 0-30%
+        trafficLevel: ['Low', 'Medium', 'High'][Math.floor(Math.random() * 3)] as 'Low' | 'Medium' | 'High'
+      }));
+      setRestaurants(enhancedRestaurants);
+    }
+  }, []);
 
-        // 使用我们的 API 路由
-        const response = await fetch(
-          `/api/restaurants?lat=${coordinates.lat}&lng=${coordinates.lng}`
-        );
-
-        if (!response.ok) {
-          throw new Error('Failed to fetch restaurants');
-        }
-
-        const restaurants = await response.json();
-        setRestaurants(restaurants);
-      } catch (error) {
-        console.error('Error fetching restaurants:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchRestaurants();
-  }, [router]);
-
-  const handleRestaurantClick = (id: string) => {
-    router.push(`/restaurants/${id}`);
+  const getPhotoUrl = (photoReference: string) => {
+    return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoReference}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`;
   };
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center min-h-screen">
-        <div className="text-xl">Loading restaurants...</div>
-      </div>
-    );
-  }
+  const getTrafficStars = (level: string) => {
+    switch (level) {
+      case 'Low':
+        return (
+          <span className="text-green-500">
+            ★<span className="text-gray-300">★★</span>
+          </span>
+        );
+      case 'Medium':
+        return (
+          <span className="text-yellow-500">
+            ★★<span className="text-gray-300">★</span>
+          </span>
+        );
+      case 'High':
+        return <span className="text-red-500">★★★</span>;
+      default:
+        return <span className="text-gray-300">★★★</span>;
+    }
+  };
+
+  const handleRestaurantClick = () => {
+    router.push('/order');
+  };
 
   return (
-    <div className="max-w-2xl mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
-      <h1 className="text-2xl font-bold mb-6">Nearby Restaurants</h1>
-      <button
-        onClick={() => router.push('/restaurants/search')}
-        className="px-4 py-2 bg-yellow-400 rounded-lg hover:bg-yellow-500"
-      > Search
-      </button></div>
-      <div className="grid gap-4">
+    <div className="container mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-4">Nearby Restaurants</h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {restaurants.map((restaurant) => (
-          <div
-            key={restaurant.id}
-            onClick={() => handleRestaurantClick(restaurant.id)}
-            className="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer"
-          >
-            <div className="flex h-32 sm:h-48">
-              {/* 餐厅图片 */}
-              <div className="relative w-1/3">
-                <Image
-                  src={restaurant.image}
-                  alt={restaurant.name}
-                  fill
-                  className="object-cover"
-                />
-              </div>
-              
-              {/* 餐厅信息 */}
-              <div className="flex-1 p-4">
-                <div className="flex justify-between items-start">
-                  <h3 className="text-lg font-semibold">{restaurant.name}</h3>
-                  {restaurant.price_level && (
-                    <span className="text-gray-600">
-                      {'$'.repeat(restaurant.price_level)}
-                    </span>
-                  )}
-                </div>
-                
-                <div className="mt-2 flex items-center space-x-2">
-                  <span className="text-sm text-gray-600">
-                    ⭐ {restaurant.rating}
-                  </span>
-                  {restaurant.opening_hours && (
-                    <span className={`text-sm ${
-                      restaurant.opening_hours.open_now ? 'text-green-600' : 'text-red-600'
-                    }`}>
-                      {restaurant.opening_hours.open_now ? 'Open' : 'Closed'}
-                    </span>
-                  )}
-                </div>
-                
-                <div className="mt-2 text-sm text-gray-600">
-                  {restaurant.vicinity}
-                </div>
-              </div>
+          <div key={restaurant.id} className="border rounded-lg p-4 shadow"  onClick={() => handleRestaurantClick()}>
+            {restaurant.photos[0] && (
+              <img
+                src={getPhotoUrl(restaurant.photos[0].photoReference)}
+                alt={restaurant.name}
+                className="w-full h-48 object-cover rounded-lg mb-2"
+              />
+            )}
+            <h2 className="text-xl font-semibold">{restaurant.name}</h2>
+            <p className="text-gray-600">{restaurant.vicinity}</p>
+                       {/* Rating, Reviews, Price Level, and Discount in one line */}
+                       <div className="mt-2 flex items-center flex-wrap gap-2">
+              <span className="text-yellow-500">★ {restaurant.rating}</span>
+              <span className="text-gray-500">({restaurant.userRatingsTotal} reviews)</span>
+              {restaurant.priceLevel && (
+                <span className="text-gray-500">
+                  {'$'.repeat(restaurant.priceLevel)}
+                </span>
+              )}
+              {restaurant.discountRate > 0 && (
+                <span className="bg-red-100 text-red-800 px-2 py-0.5 rounded-full text-sm font-semibold">
+                  Discount: {restaurant.discountRate}% OFF
+                </span>
+              )}
+            </div>
+
+            {/* Traffic Level */}
+            <div className="mt-2 flex items-center">
+              <span className="text-sm font-medium mr-2">Traffic:</span>
+              <span className="text-lg">{getTrafficStars(restaurant.trafficLevel)}</span>
             </div>
           </div>
         ))}

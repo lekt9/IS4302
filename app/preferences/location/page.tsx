@@ -100,15 +100,37 @@ export default function LocationSettingsPage() {
 
         const data = await response.json();
         console.log('Received response:', data);
-        
-        // Store restaurants data in localStorage
-        localStorage.setItem('nearbyRestaurants', JSON.stringify(data));
-        
-        // Navigate to home page
+        // Extract relevant information from each restaurant
+        // Only process if we have results
+        if (data.results && Array.isArray(data.results)) {
+          const restaurantsData = data.results.map((place: any) => ({
+            id: place.place_id,
+            name: place.name,
+            rating: place.rating || 0,
+            userRatingsTotal: place.user_ratings_total || 0,
+            vicinity: place.vicinity || '',
+            priceLevel: place.price_level,
+            photos: place.photos ? place.photos.map((photo: any) => ({
+              photoReference: photo.photo_reference,
+              height: photo.height,
+              width: photo.width,
+            })) : [],
+            location: place.geometry?.location || { lat: 0, lng: 0 }
+          }));
+
+          console.log('Processed restaurant data:', restaurantsData);
+
+          localStorage.setItem('nearbyRestaurants', JSON.stringify({
+            restaurants: restaurantsData,
+            nextPageToken: data.next_page_token
+          }));
+        } else {
+          console.error('No results found in response');
+        }
+
         router.push('/home');
       } catch (error) {
-        console.error('Error fetching nearby restaurants:', error);
-        // You might want to add error handling UI here
+        console.error('Error processing response:', error);
       }
     }
   };
