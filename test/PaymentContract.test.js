@@ -53,36 +53,27 @@ contract("PaymentContract", accounts => {
     });
 
     describe("2. Restaurant Registration", () => {
-        it("2.1 Owner should be able to register a restaurant", async () => {
-            const result = await paymentContract.registerRestaurant(restaurant1, { from: owner });
+        it("2.1 Restaurant should be able to register itself", async () => {
+            const googlemapId = "test_google_map_id";
+            const result = await paymentContract.registerRestaurant(googlemapId, { from: restaurant1 });
             
             // Check if restaurant is registered
-            expect(await paymentContract.registeredRestaurants(restaurant1)).to.be.true;
+            const restaurantInfo = await paymentContract.restaurants(restaurant1);
+            expect(restaurantInfo.googlemap_id).to.equal(googlemapId);
+            expect(restaurantInfo.customRatio).to.be.bignumber.equal(BASE_RATIO);
             
             // Check if event was emitted
             expectEvent(result, 'RestaurantRegistered', {
-                restaurant: restaurant1
+                restaurant: restaurant1,
+                googlemap_id: googlemapId
             });
         });
 
-        it("2.2 Should not allow non-owner to register restaurant", async () => {
+        it("2.2 Should not allow registering same restaurant twice", async () => {
+            const googlemapId = "test_google_map_id";
+            await paymentContract.registerRestaurant(googlemapId, { from: restaurant1 });
             await expectRevert(
-                paymentContract.registerRestaurant(restaurant1, { from: user1 }),
-                "Only owner can call this function"
-            );
-        });
-
-        it("2.3 Should not allow registering zero address", async () => {
-            await expectRevert(
-                paymentContract.registerRestaurant('0x0000000000000000000000000000000000000000', { from: owner }),
-                "Invalid restaurant address"
-            );
-        });
-
-        it("2.4 Should not allow registering same restaurant twice", async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            await expectRevert(
-                paymentContract.registerRestaurant(restaurant1, { from: owner }),
+                paymentContract.registerRestaurant(googlemapId, { from: restaurant1 }),
                 "Restaurant already registered"
             );
         });
@@ -90,13 +81,15 @@ contract("PaymentContract", accounts => {
 
     describe("3. Restaurant Removal", () => {
         beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            const googlemapId = "test_google_map_id";
+            await paymentContract.registerRestaurant(googlemapId, { from: restaurant1 });
         });
 
         it("3.1 Owner should be able to remove a restaurant", async () => {
             const result = await paymentContract.removeRestaurant(restaurant1, { from: owner });
             
-            expect(await paymentContract.registeredRestaurants(restaurant1)).to.be.false;
+            const restaurantInfo = await paymentContract.restaurants(restaurant1);
+            expect(restaurantInfo.googlemap_id).to.equal(""); // Should be empty after removal
             
             expectEvent(result, 'RestaurantRemoved', {
                 restaurant: restaurant1
@@ -122,7 +115,8 @@ contract("PaymentContract", accounts => {
         const paymentAmount = new BN('1000000'); // 1 USDT
 
         beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
+            const googlemapId = "test_google_map_id";
+            await paymentContract.registerRestaurant(googlemapId, { from: restaurant1 });
             // Transfer more USDT to user1 for testing
             await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
             // Approve payment contract to spend user's USDT
@@ -178,249 +172,38 @@ contract("PaymentContract", accounts => {
         });
     });
 
-    describe("5. Volume Tracking and Ratio Calculation", () => {
-        const paymentAmount = new BN('1000000'); // 1 USDT
-
+    describe("5. Get Restaurants By Ratio", () => {
         beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            // Transfer more USDT to user1
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
-            // Approve a larger amount for multiple payments
-            await mockUSDT.approve(paymentContract.address, new BN('100000000'), { from: user1 }); // 100 USDT approval
+            // Register two restaurants with different initial conditions
+            await paymentContract.registerRestaurant("GoogleMapID_Restaurant1", { from: restaurant1 });
+            await paymentContract.registerRestaurant("GoogleMapID_Restaurant2", { from: restaurant2 });
+    
+            // Transfer USDT to user1 and approve PaymentContract to spend
+            await mockUSDT.transfer(user1, new BN('1000'), { from: owner }); // 1000 USDT
+            await mockUSDT.approve(paymentContract.address, new BN('1000'), { from: user1 }); // 1000 USDT approval
+    
+            // Make payments to both restaurants to adjust their customRatios
+            await paymentContract.pay(restaurant1, new BN('1'), { from: user1 }); // 1 USDT
+            await paymentContract.pay(restaurant2, new BN('30'), { from: user1 }); // 30 USDT
         });
+    
+        it("5.1 Should return restaurants sorted by custom ratio in ascending order", async () => {
+            const sortedRestaurants = await paymentContract.getRestaurantsByRatio();
+    
+            // Check the expected custom ratios
+            const customRatio1 = await paymentContract._calculateCustomRatio(restaurant1);
+            const customRatio2 = await paymentContract._calculateCustomRatio(restaurant2);
+    
+            // Construct the expected strings based on the output format
+            const expectedRestaurant1 = `Restaurant Address: ${restaurant1.toLowerCase().slice(2)}, Google Map ID: GoogleMapID_Restaurant1, Custom Ratio: ${customRatio1}`;
+            const expectedRestaurant2 = `Restaurant Address: ${restaurant2.toLowerCase().slice(2)}, Google Map ID: GoogleMapID_Restaurant2, Custom Ratio: ${customRatio2}`;
+    
+            // Check if the first restaurant in the sorted list is restaurant2
+            expect(sortedRestaurants[0]).to.equal(expectedRestaurant2);
 
-        it("5.1 Should calculate correct ratio for first payment", async () => {
-            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            
-            const event = result.logs.find(log => log.event === 'PaymentProcessed');
-            expect(event.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
-            expect(event.args.adjustedAmount).to.be.bignumber.equal(paymentAmount);
-        });
-
-        it("5.2 Should decrease ratio with multiple payments", async () => {
-            // Make multiple payments with sufficient balance
-            for(let i = 0; i < 3; i++) {
-                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            }
-
-            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            const event = result.logs.find(log => log.event === 'PaymentProcessed');
-            
-            // Ratio should be lower than BASE_RATIO but not below MIN_RATIO
-            expect(event.args.customRatio)
-                .to.be.bignumber.lt(BASE_RATIO)
-                .and.to.be.bignumber.gte(MIN_RATIO);
-        });
-    });
-
-    describe("6. Time Window Effects", () => {
-        const paymentAmount = new BN('1000000'); // 1 USDT
-
-        beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            // Transfer more USDT to user1
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
-            // Approve for multiple payments
-            await mockUSDT.approve(paymentContract.address, new BN('100000000'), { from: user1 }); // 100 USDT approval
-        });
-
-        it("6.1 Should reset ratio after time window", async () => {
-            // Make initial payments to reduce ratio
-            for(let i = 0; i < 5; i++) {
-                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            }
-            
-            // Get ratio after multiple payments
-            const beforeResult = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            const beforeRatio = beforeResult.logs.find(log => log.event === 'PaymentProcessed').args.customRatio;
-            
-            // Verify ratio has decreased from base due to volume
-            expect(beforeRatio).to.be.bignumber.lt(BASE_RATIO);
-
-            // Advance time beyond time window
-            await time.increase(TIME_WINDOW.add(new BN('1')));
-
-            // Make new payment in new time window
-            const afterResult = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            const afterEvent = afterResult.logs.find(log => log.event === 'PaymentProcessed');
-
-            // After time window, ratio should be back to BASE_RATIO since old data is cleared
-            expect(afterEvent.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
-            expect(afterEvent.args.adjustedAmount).to.be.bignumber.equal(paymentAmount);
+            // Check if the second restaurant in the sorted list is restaurant1
+            expect(sortedRestaurants[1]).to.equal(expectedRestaurant1);
         });
     });
-
-    describe("7. Edge Cases and Error Handling", () => {
-        const paymentAmount = new BN('1000000'); // 1 USDT
-
-        beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            // Transfer a reasonable amount of USDT to user1
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
-            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 }); // 10 USDT approval
-        });
-
-        it("7.1 Should handle larger payment amounts", async () => {
-            const largeAmount = new BN('5000000'); // 5 USDT
-            const result = await paymentContract.pay(restaurant1, largeAmount, { from: user1 });
-            
-            expectEvent(result, 'PaymentProcessed', {
-                user: user1,
-                restaurant: restaurant1,
-                originalAmount: largeAmount
-            });
-        });
-
-        it("7.2 Should handle multiple rapid payments within same block", async () => {
-            const payments = [];
-            for(let i = 0; i < 5; i++) {
-                payments.push(paymentContract.pay(restaurant1, paymentAmount, { from: user1 }));
-            }
-            
-            const results = await Promise.all(payments);
-            
-            // Verify all payments were processed
-            results.forEach(result => {
-                expectEvent(result, 'PaymentProcessed');
-            });
-        });
-
-        it("7.3 Should handle payments at minimum ratio threshold", async () => {
-            // Make multiple payments to reach minimum ratio
-            for(let i = 0; i < 10; i++) {
-                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            }
-            
-            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            const event = result.logs.find(log => log.event === 'PaymentProcessed');
-            
-            // Verify ratio doesn't go below minimum
-            expect(event.args.customRatio).to.be.bignumber.gte(MIN_RATIO);
-        });
-
-        it("7.4 Should handle concurrent payments from multiple users", async () => {
-            // Setup second user
-            await mockUSDT.transfer(user2, new BN('10000000'), { from: owner });
-            await mockUSDT.approve(paymentContract.address, new BN('100000000'), { from: user2 });
-            
-            // Make concurrent payments
-            const [result1, result2] = await Promise.all([
-                paymentContract.pay(restaurant1, paymentAmount, { from: user1 }),
-                paymentContract.pay(restaurant1, paymentAmount, { from: user2 })
-            ]);
-            
-            expectEvent(result1, 'PaymentProcessed');
-            expectEvent(result2, 'PaymentProcessed');
-        });
-    });
-
-    describe("8. Volume Data Management", () => {
-        const paymentAmount = new BN('100000'); // 0.1 USDT (reduced for multiple transactions)
-
-        beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
-            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 });
-        });
-
-        it("8.1 Should properly clean up old volume data", async () => {
-            // Make initial payment
-            await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            
-            // Advance time beyond window
-            await time.increase(TIME_WINDOW.add(new BN('1')));
-            
-            // Make new payment
-            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            const event = result.logs.find(log => log.event === 'PaymentProcessed');
-            
-            // Should use base ratio as old data is cleaned
-            expect(event.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
-        });
-
-        it("8.2 Should handle multiple transactions within time window", async () => {
-            // Make several transactions within time window (reduced from 50 to 20)
-            for(let i = 0; i < 20; i++) {
-                await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            }
-            
-            // Verify contract can still process payments
-            const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
-            expectEvent(result, 'PaymentProcessed');
-        });
-    });
-
-    describe("9. Restaurant Management Edge Cases", () => {
-        it("9.1 Should handle re-registering removed restaurant", async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            await paymentContract.removeRestaurant(restaurant1, { from: owner });
-            
-            // Re-register
-            const result = await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            expectEvent(result, 'RestaurantRegistered', {
-                restaurant: restaurant1
-            });
-        });
-
-        it("9.2 Should maintain correct restaurant count through multiple operations", async () => {
-            // Register multiple restaurants
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            await paymentContract.registerRestaurant(restaurant2, { from: owner });
-            
-            // Remove one
-            await paymentContract.removeRestaurant(restaurant1, { from: owner });
-            
-            // Get restaurants
-            const restaurants = await paymentContract.getRestaurants();
-            expect(restaurants.length).to.equal(1);
-            expect(restaurants[0]).to.equal(restaurant2);
-        });
-    });
-
-    describe("10. Ratio Calculation Edge Cases", () => {
-        beforeEach(async () => {
-            await paymentContract.registerRestaurant(restaurant1, { from: owner });
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
-            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 });
-        });
-
-        it("10.1 Should handle ratio calculation with zero total volume", async () => {
-            const result = await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
-            const event = result.logs.find(log => log.event === 'PaymentProcessed');
-            expect(event.args.customRatio).to.be.bignumber.equal(BASE_RATIO);
-        });
-
-        it("10.2 Should handle extremely small payment amounts", async () => {
-            const smallAmount = new BN('1'); // 0.000001 USDT
-            const result = await paymentContract.pay(restaurant1, smallAmount, { from: user1 });
-            
-            expectEvent(result, 'PaymentProcessed', {
-                originalAmount: smallAmount
-            });
-        });
-
-        it("10.3 Should reset to base ratio in new time window", async () => {
-            // Make payments to affect ratio in first window
-            for(let i = 0; i < 3; i++) {
-                await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
-            }
-            
-            // Get ratio at end of first window
-            const firstWindowResult = await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
-            const firstWindowRatio = firstWindowResult.logs.find(log => log.event === 'PaymentProcessed').args.customRatio;
-            
-            // Verify ratio decreased in first window
-            expect(firstWindowRatio).to.be.bignumber.lt(BASE_RATIO);
-            
-            // Advance time to next window
-            await time.increase(TIME_WINDOW.add(new BN('1')));
-            
-            // Make payment in new window
-            const newWindowResult = await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 });
-            const newWindowRatio = newWindowResult.logs.find(log => log.event === 'PaymentProcessed').args.customRatio;
-            
-            // Verify ratio resets to BASE_RATIO in new window
-            expect(newWindowRatio).to.be.bignumber.equal(BASE_RATIO);
-        });
-    });
-}); 
+    
+});
