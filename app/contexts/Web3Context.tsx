@@ -34,7 +34,7 @@ const Web3Context = createContext<Web3ContextType>({
 });
 
 export function Web3Provider({ children }: { children: ReactNode }) {
-  const [provider, setProvider] = useState<ethers.providers.Web3Provider | null>(null);
+  const [provider, setProvider] = useState<ethers.providers.JsonRpcProvider | null>(null);
   const [signer, setSigner] = useState<ethers.Signer | null>(null);
   const [paymentContract, setPaymentContract] = useState<ethers.Contract | null>(null);
   const [usdtContract, setUsdtContract] = useState<ethers.Contract | null>(null);
@@ -44,29 +44,36 @@ export function Web3Provider({ children }: { children: ReactNode }) {
 
   const PAYMENT_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS;
   const USDT_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_USDT_CONTRACT_ADDRESS;
+  const ETHEREUM_RPC_URL = process.env.NEXT_PUBLIC_ETHEREUM_RPC_URL || 'http://127.0.0.1:7545';
+  const NETWORK_ID = '1337'; // Ganache default network ID
+  const NETWORK_HEX = '0x539'; // Hex value of 1337
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.ethereum) {
-      const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+    console.log('ETHEREUM_RPC_URL', ETHEREUM_RPC_URL);
+    if (typeof window !== 'undefined') {
+      const web3Provider = new ethers.providers.JsonRpcProvider(ETHEREUM_RPC_URL);
+      
       setProvider(web3Provider);
 
-      // Check if already connected
-      web3Provider.listAccounts().then(accounts => {
-        if (accounts.length > 0) {
-          handleAccountsChanged(accounts);
-        }
-      });
+      // Check if already connected (only for MetaMask)
+      if (window.ethereum) {
+        web3Provider.listAccounts().then(accounts => {
+          if (accounts.length > 0) {
+            handleAccountsChanged(accounts);
+          }
+        });
 
-      // Setup event listeners
-      window.ethereum.on('accountsChanged', handleAccountsChanged);
-      window.ethereum.on('chainChanged', () => window.location.reload());
+        // Setup event listeners
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', () => window.location.reload());
 
-      return () => {
-        if (window.ethereum.removeListener) {
-          window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-          window.ethereum.removeListener('chainChanged', () => {});
-        }
-      };
+        return () => {
+          if (window.ethereum.removeListener) {
+            window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+            window.ethereum.removeListener('chainChanged', () => {});
+          }
+        };
+      }
     }
   }, []);
 
@@ -79,7 +86,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
       setUsdtContract(null);
       toast.error('Please connect your wallet');
     } else if (accounts[0] !== account) {
-      const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+      const web3Provider = new ethers.providers.JsonRpcProvider(ETHEREUM_RPC_URL);
       const web3Signer = web3Provider.getSigner();
       
       setAccount(accounts[0]);
@@ -132,20 +139,85 @@ export function Web3Provider({ children }: { children: ReactNode }) {
     }
   };
 
+  const setupNetwork = async () => {
+    if (!window.ethereum) return false;
+
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: NETWORK_HEX }],
+      });
+      return true;
+    } catch (switchError: any) {
+      // This error code indicates that the chain has not been added to MetaMask
+      if (switchError.code === 4902) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [
+              {
+                chainId: NETWORK_HEX,
+                chainName: 'Ganache Local',
+                nativeCurrency: {
+                  name: 'ETH',
+                  symbol: 'ETH',
+                  decimals: 18,
+                },
+                rpcUrls: [ETHEREUM_RPC_URL],
+                blockExplorerUrls: [],
+              },
+            ],
+          });
+          return true;
+        } catch (addError) {
+          console.error('Error adding network:', addError);
+          return false;
+        }
+      }
+      console.error('Error switching network:', switchError);
+      return false;
+    }
+  };
+
   const connectWallet = async () => {
+    console.log('Attempting to connect wallet...');
+    
     if (!window.ethereum) {
+      console.log('MetaMask not found');
       toast.error('Please install MetaMask');
       return;
     }
 
     try {
+      console.log('Setting up network...');
+      const networkConfigured = await setupNetwork();
+      if (!networkConfigured) {
+        console.log('Network configuration failed');
+        toast.error('Failed to configure network. Please check MetaMask.');
+        return;
+      }
+
+      console.log('Requesting accounts...');
       const accounts = await window.ethereum.request({ 
         method: 'eth_requestAccounts' 
       });
       
+      console.log('Accounts received:', accounts);
+      
       if (accounts.length > 0) {
+        console.log('Creating Web3Provider...');
         const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
         const web3Signer = web3Provider.getSigner();
+        
+        console.log('Verifying network...');
+        const network = await web3Provider.getNetwork();
+        console.log('Current network:', network);
+        
+        if (network.chainId !== parseInt(NETWORK_ID)) {
+          console.log('Wrong network detected');
+          toast.error('Please connect to the correct network in MetaMask');
+          return;
+        }
         
         setProvider(web3Provider);
         setSigner(web3Signer);
@@ -153,15 +225,17 @@ export function Web3Provider({ children }: { children: ReactNode }) {
         setIsConnected(true);
 
         if (PAYMENT_CONTRACT_ADDRESS && USDT_CONTRACT_ADDRESS) {
+          console.log('Setting up contracts...');
           setupContracts(web3Signer);
         }
 
         await updateBalance(accounts[0], web3Provider);
+        console.log('Wallet connected successfully');
         toast.success('Wallet connected successfully!');
       }
     } catch (error) {
-      console.error('Error connecting wallet:', error);
-      toast.error('Failed to connect wallet');
+      console.error('Wallet connection error:', error);
+      toast.error(error.message || 'Failed to connect wallet');
     }
   };
 

@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import "./globals.css";
 import { Toaster } from 'react-hot-toast';
 import { GoogleMapsProvider } from './contexts/GoogleMapsContext';
+import { Web3Provider } from './contexts/Web3Context';
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
   variable: "--font-geist-sans",
@@ -29,8 +30,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <GoogleMapsProvider>
-        {children}</GoogleMapsProvider>
+        <Web3Provider>
+          <GoogleMapsProvider>
+            {children}
+          </GoogleMapsProvider>
+        </Web3Provider>
         <Toaster />
       </body>
     </html>

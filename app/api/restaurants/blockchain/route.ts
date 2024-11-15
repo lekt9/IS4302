@@ -9,10 +9,30 @@ const paymentContract = new ethers.Contract(
   provider
 );
 
+// New function to get all registered restaurants
+async function getRegisteredRestaurants() {
+  try {
+    const filter = paymentContract.filters.RestaurantRegistered();
+    const events = await paymentContract.queryFilter(filter);
+    const registeredIds = events.map(event => event.args?.googlemap_id);
+    return [...new Set(registeredIds)]; // Remove duplicates
+  } catch (error) {
+    console.error('Error getting registered restaurants:', error);
+    return [];
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const restaurantId = searchParams.get('restaurantId');
+    const getAll = searchParams.get('getAll') === 'true';
+
+    if (getAll) {
+      // Return all registered restaurant IDs
+      const registeredIds = await getRegisteredRestaurants();
+      return NextResponse.json({ registeredIds });
+    }
 
     if (!restaurantId) {
       return NextResponse.json(
@@ -21,7 +41,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // Get restaurant data from blockchain
+    // Get specific restaurant data from blockchain
     const restaurantInfo = await paymentContract.restaurants(restaurantId);
     const customRatio = await paymentContract._calculateCustomRatio(restaurantId);
 

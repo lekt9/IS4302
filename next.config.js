@@ -2,7 +2,7 @@
 const nextConfig = {
     reactStrictMode: true,
     images: {
-      domains: ['localhost'], // 如果需要从特定域名加载图片
+      domains: ['localhost', 'maps.googleapis.com'], // 如果需要从特定域名加载图片
     },
     // 其他配置...
   }
