@@ -1,18 +1,40 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useWeb3 } from '../contexts/Web3Context';
+import { ethers } from 'ethers';
+import PaymentContractABI from '../contracts/PaymentContract.json';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 
 export default function RegisterPage() {
   const router = useRouter();
-  const { isConnected, connectWallet, paymentContract } = useWeb3();
+  const { isConnected, connectWallet, paymentContract, signer } = useWeb3();
   const [googleMapId, setGoogleMapId] = useState('');
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<any>(null);
+  const [localContract, setLocalContract] = useState<ethers.Contract | null>(null);
+
+  useEffect(() => {
+    const initializeContract = async () => {
+      if (signer) {
+        try {
+          const contract = new ethers.Contract(
+            process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS!,
+            PaymentContractABI,
+            signer
+          );
+          setLocalContract(contract);
+        } catch (error) {
+          console.error('Error initializing contract:', error);
+        }
+      }
+    };
+
+    initializeContract();
+  }, [signer]);
 
   const searchPlaces = async () => {
     if (!searchQuery.trim()) return;
@@ -36,11 +58,30 @@ export default function RegisterPage() {
     }
   };
 
-  const handlePlaceSelect = (place: any) => {
+  const checkIfRestaurantRegistered = async (googleMapId: string) => {
+    try {
+      const restaurantInfo = await localContract?.restaurants(googleMapId);
+      return restaurantInfo && restaurantInfo.googlemap_id !== '';
+    } catch (error) {
+      console.error('Error checking restaurant registration:', error);
+      return false;
+    }
+  };
+
+  const handlePlaceSelect = async (place: any) => {
     setSelectedPlace(place);
     setGoogleMapId(place.place_id);
     setSearchResults([]);
-    toast.success('Restaurant selected');
+
+    // Check if restaurant is already registered
+    const isRegistered = await checkIfRestaurantRegistered(place.place_id);
+    if (isRegistered) {
+      toast.error('This restaurant is already registered');
+      setGoogleMapId('');
+      setSelectedPlace(null);
+    } else {
+      toast.success('Restaurant selected');
+    }
   };
 
   const handleRegister = async () => {
@@ -54,18 +95,47 @@ export default function RegisterPage() {
       return;
     }
 
+    if (!localContract) {
+      toast.error('Contract not initialized');
+      return;
+    }
+
+    // Double check registration status before proceeding
+    const isRegistered = await checkIfRestaurantRegistered(googleMapId);
+    if (isRegistered) {
+      toast.error('This restaurant is already registered');
+      setGoogleMapId('');
+      setSelectedPlace(null);
+      return;
+    }
+
     setLoading(true);
     try {
-      const tx = await paymentContract?.registerRestaurant(googleMapId);
+      console.log('Registering restaurant with ID:', googleMapId);
+      console.log('Using contract address:', process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS);
+      
+      const tx = await localContract.registerRestaurant(googleMapId, {
+        gasLimit: 200000 // Add explicit gas limit
+      });
       const loadingToast = toast.loading('Registering restaurant...');
+      console.log('Transaction hash:', tx.hash);
+      
       await tx.wait();
+      console.log('Transaction confirmed');
       
       toast.dismiss(loadingToast);
       toast.success('Restaurant registered successfully!');
       router.push('/home');
     } catch (error: any) {
       console.error('Registration error:', error);
-      toast.error(error.message || 'Failed to register restaurant');
+      let errorMessage = 'Failed to register restaurant';
+      
+      // Extract error message from contract revert
+      if (error.data?.message === 'revert') {
+        errorMessage = error.data?.reason || errorMessage;
+      }
+      
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }

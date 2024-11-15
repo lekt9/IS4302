@@ -235,14 +235,18 @@ contract PaymentContract {
             return baseRatio;
         }
 
+        // Calculate relative share (scaled by 1e18)
         uint256 relativeShare = (TT_a * 1e18) / TT_total;
-        uint256 decay = (relativeShare * decayFactor) / 1e18;
 
+        // Inverse decay: smaller share = larger decay
+        uint256 inverseShare = 1e18 - relativeShare;
+        uint256 decay = (inverseShare * decayFactor) / 1e18;
+
+        // Calculate current ratio
         uint256 currentRatio = baseRatio;
-
         if (decay > 0) {
             uint256 reduction = (baseRatio * decay) / 1e18;
-            if (reduction >= baseRatio) {
+            if (reduction >= baseRatio - minRatio) {
                 return minRatio;
             }
             currentRatio = baseRatio - reduction;

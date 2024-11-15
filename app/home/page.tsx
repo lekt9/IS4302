@@ -3,6 +3,12 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWeb3 } from '../contexts/Web3Context';
 import toast from 'react-hot-toast';
+import { BlockchainService } from '../services/BlockchainService';
+
+interface Coordinates {
+  lat: number;
+  lng: number;
+}
 
 interface Restaurant {
   id: string;
@@ -30,47 +36,88 @@ interface Restaurant {
 
 export default function HomePage() {
   const router = useRouter();
-  const { isConnected, connectWallet } = useWeb3();
+  const { isConnected, connectWallet, provider } = useWeb3();
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
+
+  // Get user's location
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setCoordinates({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.error('Error getting location:', error);
+          toast.error('Failed to get your location. Please enable location services.');
+          // Set default coordinates (e.g., city center)
+          setCoordinates({
+            lat: 1.3521, // Singapore coordinates as default
+            lng: 103.8198
+          });
+        }
+      );
+    } else {
+      toast.error('Geolocation is not supported by your browser');
+      // Set default coordinates
+      setCoordinates({
+        lat: 1.3521,
+        lng: 103.8198
+      });
+    }
+  }, []);
 
   useEffect(() => {
-    const loadRestaurants = async () => {
-      if (!isConnected) return;
-      
+    const fetchRestaurants = async () => {
       try {
-        setLoading(true);
-        
-        // Get user's location from localStorage
-        const userLocation = localStorage.getItem('userLocation');
-        if (!userLocation) {
-          router.push('/preferences/location');
-          return;
-        }
+        if (!provider || !coordinates) return;
 
-        const { coordinates } = JSON.parse(userLocation);
+        // Get registered restaurants from blockchain
+        const blockchainService = new BlockchainService(provider);
+        const registeredRestaurants = await blockchainService.getRegisteredRestaurants();
         
-        // Fetch restaurants from our API (which now gets data from blockchain first)
+        // Get restaurant details from API
         const response = await fetch(
-          `/api/restaurants?lat=${coordinates.lat}&lng=${coordinates.lng}`
+          `/api/restaurants?lat=${coordinates.lat}&lng=${coordinates.lng}&placeIds=${
+            registeredRestaurants.map(r => r.id).join(',')
+          }`
         );
         
-        if (!response.ok) {
-          throw new Error('Failed to fetch restaurants');
-        }
+        if (!response.ok) throw new Error('Failed to fetch restaurants');
+        const apiRestaurants = await response.json();
+        
+        // Merge blockchain data with API data
+        const mergedRestaurants = apiRestaurants.map((restaurant: any) => {
+          const blockchainData = registeredRestaurants.find(r => r.id === restaurant.id);
+          return {
+            ...restaurant,
+            blockchainData: blockchainData ? {
+              isRegistered: true,
+              address: blockchainData.contractData.owner,
+              discountRate: parseFloat(blockchainData.contractData.discountRate)
+            } : {
+              isRegistered: false,
+              address: '',
+              discountRate: 0
+            }
+          };
+        });
 
-        const data = await response.json();
-        setRestaurants(data);
+        setRestaurants(mergedRestaurants);
       } catch (error) {
-        console.error('Error loading restaurants:', error);
-        toast.error('Failed to load restaurant data');
+        console.error('Error fetching restaurants:', error);
+        toast.error('Failed to load restaurants');
       } finally {
         setLoading(false);
       }
     };
 
-    loadRestaurants();
-  }, [isConnected, router]);
+    fetchRestaurants();
+  }, [provider, coordinates]); // Added coordinates as dependency
 
   const getPhotoUrl = (photoReference: string) => {
     return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoReference}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`;

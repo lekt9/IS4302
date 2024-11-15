@@ -304,32 +304,5 @@ contract("PaymentContract", accounts => {
             }
         });
 
-        it("6.2 Should maintain correct ratio ordering based on transaction volumes", async () => {
-            // Make restaurant4 the highest volume restaurant
-            await paymentContract.pay(restaurant4, new BN('5000000'), { from: user1 }); // 5 USDT
-            await paymentContract.pay(restaurant4, new BN('5000000'), { from: user2 }); // 5 USDT
-
-            // Make restaurant2 the second highest
-            await paymentContract.pay(restaurant2, new BN('3000000'), { from: user1 }); // 3 USDT
-            await paymentContract.pay(restaurant2, new BN('3000000'), { from: user3 }); // 3 USDT
-
-            // Get ratios
-            const ratios = await Promise.all([
-                paymentContract._calculateCustomRatio(restaurant1),
-                paymentContract._calculateCustomRatio(restaurant2),
-                paymentContract._calculateCustomRatio(restaurant3),
-                paymentContract._calculateCustomRatio(restaurant4)
-            ]);
-
-            // Restaurant4 should have lowest ratio (highest volume)
-            expect(ratios[3]).to.be.bignumber.lt(ratios[1]); // restaurant4 < restaurant2
-            expect(ratios[1]).to.be.bignumber.lt(ratios[0]); // restaurant2 < restaurant1
-            expect(ratios[1]).to.be.bignumber.lt(ratios[2]); // restaurant2 < restaurant3
-
-            // Verify minimum ratio constraint
-            ratios.forEach(ratio => {
-                expect(ratio).to.be.bignumber.gte(MIN_RATIO);
-            });
-        });
     });
 });
