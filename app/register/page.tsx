@@ -7,14 +7,28 @@ import PaymentContractABI from '../contracts/PaymentContract.json';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 
+interface Place {
+  place_id: string;
+  name: string;
+  formatted_address: string;
+  contractAddress?: string;
+}
+
+interface PlaceError {
+  data?: {
+    message?: string;
+    reason?: string;
+  };
+}
+
 export default function RegisterPage() {
   const router = useRouter();
-  const { isConnected, connectWallet, paymentContract, signer } = useWeb3();
+  const { isConnected, connectWallet, signer } = useWeb3();
   const [googleMapId, setGoogleMapId] = useState('');
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [selectedPlace, setSelectedPlace] = useState<any>(null);
+  const [searchResults, setSearchResults] = useState<Place[]>([]);
+  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [localContract, setLocalContract] = useState<ethers.Contract | null>(null);
 
   useEffect(() => {
@@ -68,7 +82,7 @@ export default function RegisterPage() {
     }
   };
 
-  const handlePlaceSelect = async (place: any) => {
+  const handlePlaceSelect = async (place: Place) => {
     setSelectedPlace(place);
     setGoogleMapId(place.place_id);
     setSearchResults([]);
@@ -115,7 +129,7 @@ export default function RegisterPage() {
       console.log('Using contract address:', process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS);
       
       const tx = await localContract.registerRestaurant(googleMapId, {
-        gasLimit: 200000 // Add explicit gas limit
+        gasLimit: 200000
       });
       const loadingToast = toast.loading('Registering restaurant...');
       console.log('Transaction hash:', tx.hash);
@@ -125,14 +139,17 @@ export default function RegisterPage() {
       
       toast.dismiss(loadingToast);
       toast.success('Restaurant registered successfully!');
-      router.push('/home');
-    } catch (error: any) {
+      
+      // Navigate to restaurant detail page with both IDs
+      const contractAddress = await localContract.getAddress();
+      router.push(`/restaurants/${googleMapId}_${contractAddress}`);
+    } catch (error) {
       console.error('Registration error:', error);
       let errorMessage = 'Failed to register restaurant';
       
-      // Extract error message from contract revert
-      if (error.data?.message === 'revert') {
-        errorMessage = error.data?.reason || errorMessage;
+      const placeError = error as PlaceError;
+      if (placeError.data?.message === 'revert') {
+        errorMessage = placeError.data?.reason || errorMessage;
       }
       
       toast.error(errorMessage);

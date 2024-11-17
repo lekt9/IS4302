@@ -12,25 +12,20 @@ export interface BlockchainData {
 export interface Restaurant {
   id: string;
   name: string;
-  rating: number;
-  userRatingsTotal: number;
-  vicinity: string;
-  priceLevel?: number;
   photos: {
     photoReference: string;
     height: number;
     width: number;
   }[];
+  rating: number;
+  userRatingsTotal: number;
+  vicinity: string;
+  priceLevel?: number;
   location: {
     lat: number;
     lng: number;
   };
-  blockchainData?: {
-    address: string;
-    discountRate: number;
-    trafficLevel: 'Low' | 'Medium' | 'High';
-    isRegistered: boolean;
-  };
+  blockchainData?: BlockchainData;
 }
 
 
@@ -79,82 +74,70 @@ export class RestaurantService {
     );
   }
 
-  private async isRestaurantRegistered(googleMapId: string): Promise<boolean> {
+  async processPayment(
+    contractAddress: string,
+    amount: ethers.BigNumber,
+    discountRate: number
+  ): Promise<ethers.ContractTransaction> {
     try {
-      const restaurantInfo = await this.paymentContract.restaurants(googleMapId);
-      return restaurantInfo.googlemap_id !== '';
+      const approvalTx = await this.usdtContract.approve(
+        this.paymentContract.address,
+        amount
+      );
+      await approvalTx.wait();
+
+      const discountedAmount = amount.mul(100 - discountRate).div(100);
+
+      return await this.paymentContract.processPayment(
+        contractAddress,
+        discountedAmount,
+        {
+          gasLimit: 300000
+        }
+      );
+    } catch (error) {
+      console.error('Payment processing error:', error);
+      throw new Error('Failed to process payment');
+    }
+  }
+
+  private async isRestaurantRegistered(contractAddress: string): Promise<boolean> {
+    try {
+      const restaurantInfo = await this.paymentContract.restaurants(contractAddress);
+      return restaurantInfo && restaurantInfo.googlemap_id !== '';
     } catch (error) {
       console.error('Error checking restaurant registration:', error);
       return false;
     }
   }
 
-  private async getRestaurantDiscountRatio(restaurantId: string): Promise<ethers.BigNumber> {
+  private async getRestaurantDiscountRatio(contractAddress: string): Promise<ethers.BigNumber> {
     try {
-      return await this.paymentContract._calculateCustomRatio(restaurantId);
+      return await this.paymentContract._calculateCustomRatio(contractAddress);
     } catch (error) {
       console.error('Error getting restaurant ratio:', error);
       return ethers.BigNumber.from(0);
     }
   }
 
-  private async getRestaurantVolume(restaurantId: string): Promise<number> {
+  private async getRestaurantVolume(contractAddress: string): Promise<ethers.BigNumber> {
     try {
-      // This would need to be implemented based on your contract's volume tracking
-      // For now, returning a mock value
-      return 0;
+      return await this.paymentContract.getRestaurantVolume(contractAddress);
     } catch (error) {
       console.error('Error getting restaurant volume:', error);
-      return 0;
+      return ethers.BigNumber.from(0);
     }
   }
 
   private convertRatioToDiscount(ratio: ethers.BigNumber): number {
-    // Convert the ratio from contract (in wei) to a percentage
-    const ratioAsNumber = parseFloat(ethers.utils.formatEther(ratio));
-    // Convert to discount percentage (e.g., 0.9 ratio = 10% discount)
-    return (1 - ratioAsNumber) * 100;
+    return parseFloat(ethers.utils.formatEther(ratio)) * 100;
   }
 
-  private calculateTrafficLevel(volume: number): TrafficLevel {
-    if (volume < 10) return 'Low';
-    if (volume < 30) return 'Medium';
+  private calculateTrafficLevel(volume: ethers.BigNumber): TrafficLevel {
+    const volumeNum = volume.toNumber();
+    if (volumeNum < 5) return 'Low';
+    if (volumeNum < 10) return 'Medium';
     return 'High';
-  }
-
-  async processPayment(
-    restaurantAddress: string,
-    amount: string,
-    onApprovalSubmitted?: () => void,
-    onApprovalComplete?: () => void,
-    onPaymentSubmitted?: () => void
-  ): Promise<boolean> {
-    try {
-      // Convert amount to USDT decimals (6)
-      const amountInSmallestUnit = ethers.utils.parseUnits(amount, 6);
-      
-      // First approve USDT spending
-      onApprovalSubmitted?.();
-      const approveTx = await this.usdtContract.approve(
-        this.paymentContract.address,
-        amountInSmallestUnit
-      );
-      await approveTx.wait();
-      onApprovalComplete?.();
-
-      // Then process payment
-      onPaymentSubmitted?.();
-      const payTx = await this.paymentContract.pay(
-        restaurantAddress,
-        amountInSmallestUnit
-      );
-      await payTx.wait();
-
-      return true;
-    } catch (error) {
-      console.error('Error processing payment:', error);
-      throw error;
-    }
   }
 
   async registerRestaurant(googleMapId: string): Promise<boolean> {

@@ -15,21 +15,23 @@ contract PaymentContract {
     struct RestaurantInfo {
         string googlemap_id;
         uint256 customRatio;
+        address restaurantAddress;
     }
 
-    // Mapping to track registered restaurants and Google Map ID pairs
-    mapping(address => RestaurantInfo) public restaurants;
-    address[] public restaurantAddresses;
+    // Changed to array to store multiple restaurants
+    RestaurantInfo[] public restaurants;
+    
+    // Mapping to quickly check if a restaurant address exists and get its index
+    mapping(address => uint256) public restaurantIndices;
+    mapping(address => bool) public isRegistered;
 
     // Base Ratio (BR), Decay Factor (DF), Minimum Ratio (MR)
-    uint256 public baseRatio; // e.g., 1 * 1e18 (1.00)
-    uint256 public decayFactor; // e.g., 0.5 * 1e18 (0.50)
-    uint256 public minRatio; // e.g., 0.90 * 1e18 (0.90)
+    uint256 public baseRatio;
+    uint256 public decayFactor;
+    uint256 public minRatio;
+    uint256 public timeWindow;
 
-    // Time window for transaction volumes (e.g., 1 hour)
-    uint256 public timeWindow; // In seconds, e.g., 3600 for 1 hour
-
-    // Events for restaurant management
+    // Events
     event RestaurantRegistered(address indexed restaurant, string googlemap_id);
     event RestaurantRemoved(address indexed restaurant);
 
@@ -69,71 +71,63 @@ contract PaymentContract {
         timeWindow = _timeWindow;
     }
 
-    // Function to register a new restaurant with Google Map ID
+    // Modified registration function
     function registerRestaurant(string memory googlemap_id) external {
         require(msg.sender != address(0), "Invalid restaurant address");
-        require(
-            bytes(restaurants[msg.sender].googlemap_id).length == 0,
-            "Restaurant already registered"
-        );
+        require(!isRegistered[msg.sender], "Restaurant already registered");
 
-        restaurants[msg.sender] = RestaurantInfo({
+        RestaurantInfo memory newRestaurant = RestaurantInfo({
             googlemap_id: googlemap_id,
-            customRatio: baseRatio
+            customRatio: baseRatio,
+            restaurantAddress: msg.sender
         });
-        restaurantAddresses.push(msg.sender);
+
+        restaurants.push(newRestaurant);
+        isRegistered[msg.sender] = true;
+        restaurantIndices[msg.sender] = restaurants.length - 1;
 
         emit RestaurantRegistered(msg.sender, googlemap_id);
     }
 
-    // Function to remove a restaurant
+    // Modified remove function
     function removeRestaurant(address restaurant) external onlyOwner {
-        require(
-            bytes(restaurants[restaurant].googlemap_id).length != 0,
-            "Restaurant not registered"
-        );
+        require(isRegistered[restaurant], "Restaurant not registered");
 
-        delete restaurants[restaurant];
+        uint256 indexToRemove = restaurantIndices[restaurant];
+        uint256 lastIndex = restaurants.length - 1;
 
-        for (uint i = 0; i < restaurantAddresses.length; i++) {
-            if (restaurantAddresses[i] == restaurant) {
-                restaurantAddresses[i] = restaurantAddresses[
-                    restaurantAddresses.length - 1
-                ];
-                restaurantAddresses.pop();
-                break;
-            }
+        if (indexToRemove != lastIndex) {
+            restaurants[indexToRemove] = restaurants[lastIndex];
+            restaurantIndices[restaurants[indexToRemove].restaurantAddress] = indexToRemove;
         }
+
+        restaurants.pop();
+        delete restaurantIndices[restaurant];
+        isRegistered[restaurant] = false;
 
         emit RestaurantRemoved(restaurant);
     }
 
-    // Function to get restaurants sorted by custom ratio in ascending order
+    // Modified getter function
     function getRestaurantsByRatio() external view returns (string[] memory) {
-        uint256 length = restaurantAddresses.length;
-        RestaurantInfo[] memory sortedRestaurants = new RestaurantInfo[](
-            length
-        );
-        address[] memory sortedAddresses = new address[](length);
+        uint256 length = restaurants.length;
+        RestaurantInfo[] memory sortedRestaurants = new RestaurantInfo[](length);
 
+        // Copy restaurants array for sorting
         for (uint i = 0; i < length; i++) {
-            sortedRestaurants[i] = restaurants[restaurantAddresses[i]];
-            sortedAddresses[i] = restaurantAddresses[i];
+            sortedRestaurants[i] = restaurants[i];
         }
 
+        // Sort restaurants by custom ratio
         for (uint i = 0; i < length; i++) {
             for (uint j = i + 1; j < length; j++) {
                 if (
-                    _calculateCustomRatio(sortedAddresses[i]) >
-                    _calculateCustomRatio(sortedAddresses[j])
+                    _calculateCustomRatio(sortedRestaurants[i].restaurantAddress) >
+                    _calculateCustomRatio(sortedRestaurants[j].restaurantAddress)
                 ) {
                     (sortedRestaurants[i], sortedRestaurants[j]) = (
                         sortedRestaurants[j],
                         sortedRestaurants[i]
-                    );
-                    (sortedAddresses[i], sortedAddresses[j]) = (
-                        sortedAddresses[j],
-                        sortedAddresses[i]
                     );
                 }
             }
@@ -144,11 +138,11 @@ contract PaymentContract {
             results[i] = string(
                 abi.encodePacked(
                     "Restaurant Address: ",
-                    toAsciiString(sortedAddresses[i]),
+                    toAsciiString(sortedRestaurants[i].restaurantAddress),
                     ", Google Map ID: ",
                     sortedRestaurants[i].googlemap_id,
                     ", Custom Ratio: ",
-                    uintToString(_calculateCustomRatio(sortedAddresses[i]))
+                    uintToString(_calculateCustomRatio(sortedRestaurants[i].restaurantAddress))
                 )
             );
         }
@@ -156,13 +150,10 @@ contract PaymentContract {
         return results;
     }
 
-    // Function to process payment
+    // Modified payment function
     function pay(address restaurant, uint256 usdtAmount) external {
         require(restaurant != address(0), "Invalid restaurant address");
-        require(
-            bytes(restaurants[restaurant].googlemap_id).length != 0,
-            "Restaurant not registered"
-        );
+        require(isRegistered[restaurant], "Restaurant not registered");
         require(usdtAmount > 0, "Amount must be greater than zero");
 
         _cleanupOldData(restaurantVolumes[restaurant]);

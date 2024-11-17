@@ -1,121 +1,8 @@
-// 'use client';
-// import { useState } from 'react';
-// import { useRouter } from 'next/navigation';
-
-// export default function ReservePage() {
-//   const router = useRouter();
-//   const [guestCount, setGuestCount] = useState(2);
-//   const [date, setDate] = useState('');
-//   const [time, setTime] = useState('');
-
-//   const handleSubmit = (e: React.FormEvent) => {
-//     e.preventDefault();
-//     // 这里可以添加预订验证逻辑
-//     router.push(`payment`); // 导航到支付页面
-//   };
-
-//   // 生成时间选项的函数
-// const generateTimeOptions = () => {
-//     const times = [];
-//     const startHour = 8;  // 早上 8 点开始
-//     const endHour = 22;   // 晚上 10 点结束
-  
-//     for (let hour = startHour; hour <= endHour; hour++) {
-//       // 添加整点
-//       times.push({
-//         value: `${hour.toString().padStart(2, '0')}:00`,
-//         label: `${hour % 12 || 12}:00 ${hour < 12 ? 'AM' : 'PM'}`
-//       });
-//       // 添加半点
-//       if (hour !== endHour) {
-//         times.push({
-//           value: `${hour.toString().padStart(2, '0')}:30`,
-//           label: `${hour % 12 || 12}:30 ${hour < 12 ? 'AM' : 'PM'}`
-//         });
-//       }
-//     }
-//     return times;
-//   };
-
-//   return (
-//     <div className="min-h-screen p-6 bg-white">
-//       <h1 className="text-2xl font-bold mb-6">Make a Reservation</h1>
-      
-//       <form onSubmit={handleSubmit} className="space-y-6">
-//         {/* 人数选择 */}
-//         <div>
-//           <label className="block text-sm font-medium text-gray-700 mb-2">
-//             Number of Guests
-//           </label>
-//           <div className="flex items-center space-x-4">
-//             <button
-//               type="button"
-//               onClick={() => setGuestCount(Math.max(1, guestCount - 1))}
-//               className="p-2 border rounded-full"
-//             >
-//               -
-//             </button>
-//             <span className="text-lg">{guestCount}</span>
-//             <button
-//               type="button"
-//               onClick={() => setGuestCount(guestCount + 1)}
-//               className="p-2 border rounded-full"
-//             >
-//               +
-//             </button>
-//           </div>
-//         </div>
-
-//         {/* 日期选择 */}
-//         <div>
-//           <label className="block text-sm font-medium text-gray-700 mb-2">
-//             Date
-//           </label>
-//           <input
-//             type="date"
-//             value={date}
-//             onChange={(e) => setDate(e.target.value)}
-//             className="w-full p-3 border rounded-lg"
-//             required
-//           />
-//         </div>
-
-//         {/* 时间选择 */}
-//         <div>
-//           <label className="block text-sm font-medium text-gray-700 mb-2">
-//             Time
-//           </label>
-//           <select
-//             value={time}
-//             onChange={(e) => setTime(e.target.value)}
-//             className="w-full p-3 border rounded-lg"
-//             required
-//           >
-//             <option value="">Select time</option>
-//             {generateTimeOptions().map((timeOption) => (
-//               <option key={timeOption.value} value={timeOption.value}>
-//                 {timeOption.label}
-//               </option>
-//             ))}
-//           </select>
-//         </div>
-
-//         <button
-//           type="submit"
-//           className="w-full bg-yellow-400 text-gray-900 font-semibold py-4 px-6 rounded-full"
-//         >
-//           Continue to Payment
-//         </button>
-//       </form>
-//     </div>
-//   );
-// }
-
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useWeb3 } from '@/app/contexts/Web3Context';
-import { getRestaurantService, Restaurant, BlockchainData } from '@/app/services/RestaurantService';
+import { getRestaurantService, Restaurant } from '@/app/services/RestaurantService';
 import toast from 'react-hot-toast';
 
 interface TimeSlot {
@@ -127,7 +14,8 @@ interface TimeSlot {
 export default function ReservePage() {
   const router = useRouter();
   const params = useParams();
-  const { id } = params;
+  const { id: mergedId } = params;
+  const [gmaps_id, contractAddress] = typeof mergedId === 'string' ? mergedId.split('_') : [];
   const { isConnected, connectWallet, paymentContract, usdtContract } = useWeb3();
   
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
@@ -142,14 +30,21 @@ export default function ReservePage() {
   useEffect(() => {
     const loadRestaurantData = async () => {
       try {
-        const response = await fetch(`/api/restaurants/${id}`);
+        const response = await fetch(`/api/restaurants/${gmaps_id}`);
         if (!response.ok) throw new Error('Failed to fetch restaurant');
         
         const baseData = await response.json();
-        if (paymentContract && usdtContract) {
+        
+        if (isConnected && paymentContract && usdtContract && contractAddress) {
           const restaurantService = getRestaurantService(paymentContract, usdtContract);
           const [enhancedRestaurant] = await restaurantService.enhanceWithBlockchainData([baseData]);
-          setRestaurant(enhancedRestaurant);
+          
+          // Only set restaurant data if the contract addresses match
+          if (enhancedRestaurant.blockchainData?.address.toLowerCase() === contractAddress.toLowerCase()) {
+            setRestaurant(enhancedRestaurant);
+          } else {
+            setRestaurant(baseData);
+          }
         } else {
           setRestaurant(baseData);
         }
@@ -161,8 +56,10 @@ export default function ReservePage() {
       }
     };
 
-    loadRestaurantData();
-  }, [id, paymentContract, usdtContract]);
+    if (gmaps_id) {
+      loadRestaurantData();
+    }
+  }, [gmaps_id, contractAddress, isConnected, paymentContract, usdtContract]);
 
   // Generate time slots based on date selection
   useEffect(() => {
@@ -207,17 +104,20 @@ export default function ReservePage() {
       toast.error('Please connect your wallet first');
       return;
     }
-
     if (!restaurant?.blockchainData?.isRegistered) {
       toast.error('This restaurant is not registered in our system');
+      return;
+    }
+    if (!contractAddress) {
+      toast.error('Invalid payment address');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // Save reservation details to localStorage for the payment page
       const reservationDetails = {
-        restaurantId: id,
+        restaurantId: gmaps_id,
+        contractAddress,
         guestCount,
         date,
         time,
@@ -225,9 +125,7 @@ export default function ReservePage() {
       };
       localStorage.setItem('currentReservation', JSON.stringify(reservationDetails));
 
-      // Navigate to deposit payment if required by the restaurant
-      // For now, we'll go directly to the payment page
-      router.push(`/restaurants/${id}/payment`);
+      router.push(`/restaurants/${gmaps_id}_${contractAddress}/payment`);
     } catch (error) {
       console.error('Error processing reservation:', error);
       toast.error('Failed to process reservation');
