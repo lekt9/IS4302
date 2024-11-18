@@ -71,10 +71,28 @@ contract PaymentContract {
         timeWindow = _timeWindow;
     }
 
+    // New function to get restaurant address by Google Maps ID
+    function getRestaurantAddressByGoogleMapId(string memory googlemap_id) public view returns (address) {
+        for (uint i = 0; i < restaurants.length; i++) {
+            if (keccak256(bytes(restaurants[i].googlemap_id)) == keccak256(bytes(googlemap_id))) {
+                return restaurants[i].restaurantAddress;
+            }
+        }
+        return address(0);
+    }
+
+    // New payment function that accepts Google Maps ID
+    function payByGoogleMapId(string memory googlemap_id, uint256 usdtAmount) external {
+        address restaurantAddress = getRestaurantAddressByGoogleMapId(googlemap_id);
+        require(restaurantAddress != address(0), "Restaurant not found");
+        pay(restaurantAddress, usdtAmount);
+    }
+
     // Modified registration function
     function registerRestaurant(string memory googlemap_id) external {
         require(msg.sender != address(0), "Invalid restaurant address");
         require(!isRegistered[msg.sender], "Restaurant already registered");
+        require(getRestaurantAddressByGoogleMapId(googlemap_id) == address(0), "Google Maps ID already registered");
 
         RestaurantInfo memory newRestaurant = RestaurantInfo({
             googlemap_id: googlemap_id,
@@ -151,7 +169,7 @@ contract PaymentContract {
     }
 
     // Modified payment function
-    function pay(address restaurant, uint256 usdtAmount) external {
+    function pay(address restaurant, uint256 usdtAmount) public {
         require(restaurant != address(0), "Invalid restaurant address");
         require(isRegistered[restaurant], "Restaurant not registered");
         require(usdtAmount > 0, "Amount must be greater than zero");

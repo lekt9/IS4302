@@ -28,7 +28,6 @@ export interface Restaurant {
   blockchainData?: BlockchainData;
 }
 
-
 export class RestaurantService {
   constructor(
     private paymentContract: ethers.Contract,
@@ -39,7 +38,10 @@ export class RestaurantService {
     return Promise.all(
       restaurants.map(async (restaurant) => {
         try {
-          const isRegistered = await this.isRestaurantRegistered(restaurant.id);
+          // Get restaurant address using Google Maps ID
+          const restaurantAddress = await this.paymentContract.getRestaurantAddressByGoogleMapId(restaurant.id);
+          const isRegistered = restaurantAddress !== ethers.constants.AddressZero;
+
           if (!isRegistered) {
             return {
               ...restaurant,
@@ -53,14 +55,14 @@ export class RestaurantService {
           }
 
           const [ratio, volume] = await Promise.all([
-            this.getRestaurantDiscountRatio(restaurant.id),
-            this.getRestaurantVolume(restaurant.id)
+            this.paymentContract._calculateCustomRatio(restaurantAddress),
+            this.getRestaurantVolume(restaurantAddress)
           ]);
 
           return {
             ...restaurant,
             blockchainData: {
-              address: restaurant.id,
+              address: restaurantAddress,
               discountRate: this.convertRatioToDiscount(ratio),
               trafficLevel: this.calculateTrafficLevel(volume),
               isRegistered: true
@@ -75,22 +77,21 @@ export class RestaurantService {
   }
 
   async processPayment(
-    contractAddress: string,
-    amount: ethers.BigNumber,
-    discountRate: number
+    googleMapId: string,
+    amount: ethers.BigNumber
   ): Promise<ethers.ContractTransaction> {
     try {
+      // First approve USDT spending
       const approvalTx = await this.usdtContract.approve(
         this.paymentContract.address,
         amount
       );
       await approvalTx.wait();
 
-      const discountedAmount = amount.mul(100 - discountRate).div(100);
-
-      return await this.paymentContract.processPayment(
-        contractAddress,
-        discountedAmount,
+      // Use the new payByGoogleMapId function
+      return await this.paymentContract.payByGoogleMapId(
+        googleMapId,
+        amount,
         {
           gasLimit: 300000
         }
@@ -101,28 +102,24 @@ export class RestaurantService {
     }
   }
 
-  private async isRestaurantRegistered(contractAddress: string): Promise<boolean> {
+  private async isRestaurantRegistered(googleMapId: string): Promise<boolean> {
     try {
-      const restaurantInfo = await this.paymentContract.restaurants(contractAddress);
-      return restaurantInfo && restaurantInfo.googlemap_id !== '';
+      const restaurantAddress = await this.paymentContract.getRestaurantAddressByGoogleMapId(googleMapId);
+      return restaurantAddress !== ethers.constants.AddressZero;
     } catch (error) {
       console.error('Error checking restaurant registration:', error);
       return false;
     }
   }
 
-  private async getRestaurantDiscountRatio(contractAddress: string): Promise<ethers.BigNumber> {
+  private async getRestaurantVolume(restaurantAddress: string): Promise<ethers.BigNumber> {
     try {
-      return await this.paymentContract._calculateCustomRatio(contractAddress);
-    } catch (error) {
-      console.error('Error getting restaurant ratio:', error);
-      return ethers.BigNumber.from(0);
-    }
-  }
-
-  private async getRestaurantVolume(contractAddress: string): Promise<ethers.BigNumber> {
-    try {
-      return await this.paymentContract.getRestaurantVolume(contractAddress);
+      const volumes = await this.paymentContract.restaurantVolumes(restaurantAddress);
+      let total = ethers.BigNumber.from(0);
+      for (const volume of volumes) {
+        total = total.add(volume.amount);
+      }
+      return total;
     } catch (error) {
       console.error('Error getting restaurant volume:', error);
       return ethers.BigNumber.from(0);
@@ -130,7 +127,9 @@ export class RestaurantService {
   }
 
   private convertRatioToDiscount(ratio: ethers.BigNumber): number {
-    return parseFloat(ethers.utils.formatEther(ratio)) * 100;
+    // Convert ratio to percentage (e.g., 0.9 ratio = 10% discount)
+    const ratioAsNumber = parseFloat(ethers.utils.formatEther(ratio));
+    return (1 - ratioAsNumber) * 100;
   }
 
   private calculateTrafficLevel(volume: ethers.BigNumber): TrafficLevel {
