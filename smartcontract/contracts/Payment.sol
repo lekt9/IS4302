@@ -1,39 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./MockUSDT.sol";
 
 contract PaymentContract {
-    using SafeERC20 for MockUSDT;
+    using SafeERC20 for IERC20;
 
-    MockUSDT public usdtToken;
+    IERC20 public usdtToken;
     address public owner;
 
     // Struct to store restaurant details with Google Map ID
     struct RestaurantInfo {
         string googlemap_id;
         uint256 customRatio;
-        address restaurantAddress;
+        uint256 balance;
     }
 
-    // Array to store multiple restaurants
-    RestaurantInfo[] public restaurants;
+    // Mapping to track registered restaurants and Google Map ID pairs
+    mapping(address => RestaurantInfo) public restaurants;
+    address[] public restaurantAddresses;
 
-    // Mapping to quickly check if a restaurant address exists and get its index
-    mapping(address => uint256) public restaurantIndices;
-    mapping(address => bool) public isRegistered;
+    // Base Ratio (BR), Decay Factor (DF), Minimum Ratio (MR)
+    uint256 public baseRatio; // e.g., 1 * 1e18 (1.00)
+    uint256 public decayFactor; // e.g., 0.5 * 1e18 (0.50)
+    uint256 public minRatio; // e.g., 0.90 * 1e18 (0.90)
 
-    // Base Ratio (BR), Decay Factor (DF), Minimum Ratio (MR), Time Window
-    uint256 public baseRatio;
-    uint256 public decayFactor;
-    uint256 public minRatio;
-    uint256 public timeWindow;
+    // Time window for transaction volumes (e.g., 1 hour)
+    uint256 public timeWindow; // In seconds, e.g., 3600 for 1 hour
 
-    // Mapping to track USDT balances for each restaurant
-    mapping(address => uint256) public balances;
-
-    // Events
+    // Events for restaurant management
     event RestaurantRegistered(address indexed restaurant, string googlemap_id);
     event RestaurantRemoved(address indexed restaurant);
 
@@ -45,8 +42,7 @@ contract PaymentContract {
         uint256 customRatio
     );
 
-    event BalanceUpdated(address indexed restaurant, uint256 newBalance);
-    event Redemption(address indexed restaurant, uint256 redeemedAmount);
+    event BalanceRedeemed(address indexed restaurant, uint256 amount);
 
     struct VolumeData {
         uint256 amount;
@@ -63,123 +59,93 @@ contract PaymentContract {
 
     modifier onlyRegisteredRestaurant() {
         require(
-            isRegistered[msg.sender],
-            "Caller is not a registered restaurant"
+            bytes(restaurants[msg.sender].googlemap_id).length != 0,
+            "Restaurant not registered"
         );
         _;
     }
 
     constructor(
-        address _owner,
+        address _usdtToken,
         uint256 _baseRatio,
         uint256 _decayFactor,
         uint256 _minRatio,
         uint256 _timeWindow
     ) {
-        usdtToken = new MockUSDT(); // Deploy a new MockUSDT instance
-        owner = _owner;
+        usdtToken = IERC20(_usdtToken);
+        owner = msg.sender;
         baseRatio = _baseRatio;
         decayFactor = _decayFactor;
         minRatio = _minRatio;
         timeWindow = _timeWindow;
     }
 
-    // Function to get restaurant address by Google Maps ID
-    function getRestaurantAddressByGoogleMapId(
-        string memory googlemap_id
-    ) public view returns (address) {
-        for (uint i = 0; i < restaurants.length; i++) {
-            if (
-                keccak256(bytes(restaurants[i].googlemap_id)) ==
-                keccak256(bytes(googlemap_id))
-            ) {
-                return restaurants[i].restaurantAddress;
-            }
-        }
-        return address(0);
-    }
-
-    // Payment function that accepts Google Maps ID and credits balance
-    function payByGoogleMapId(
-        string memory googlemap_id,
-        uint256 usdtAmount
-    ) external {
-        address restaurantAddress = getRestaurantAddressByGoogleMapId(
-            googlemap_id
-        );
-        require(restaurantAddress != address(0), "Restaurant not found");
-        pay(restaurantAddress, usdtAmount);
-    }
-
-    // Registration function for restaurants
+    // Function to register a new restaurant with Google Map ID
     function registerRestaurant(string memory googlemap_id) external {
         require(msg.sender != address(0), "Invalid restaurant address");
-        require(!isRegistered[msg.sender], "Restaurant already registered");
         require(
-            getRestaurantAddressByGoogleMapId(googlemap_id) == address(0),
-            "Google Maps ID already registered"
+            bytes(restaurants[msg.sender].googlemap_id).length == 0,
+            "Restaurant already registered"
         );
 
-        RestaurantInfo memory newRestaurant = RestaurantInfo({
+        restaurants[msg.sender] = RestaurantInfo({
             googlemap_id: googlemap_id,
             customRatio: baseRatio,
-            restaurantAddress: msg.sender
+            balance: 0
         });
-
-        restaurants.push(newRestaurant);
-        isRegistered[msg.sender] = true;
-        restaurantIndices[msg.sender] = restaurants.length - 1;
+        restaurantAddresses.push(msg.sender);
 
         emit RestaurantRegistered(msg.sender, googlemap_id);
     }
 
-    // Remove a registered restaurant
+    // Function to remove a restaurant
     function removeRestaurant(address restaurant) external onlyOwner {
-        require(isRegistered[restaurant], "Restaurant not registered");
+        require(
+            bytes(restaurants[restaurant].googlemap_id).length != 0,
+            "Restaurant not registered"
+        );
 
-        uint256 indexToRemove = restaurantIndices[restaurant];
-        uint256 lastIndex = restaurants.length - 1;
+        delete restaurants[restaurant];
 
-        if (indexToRemove != lastIndex) {
-            restaurants[indexToRemove] = restaurants[lastIndex];
-            restaurantIndices[
-                restaurants[indexToRemove].restaurantAddress
-            ] = indexToRemove;
+        for (uint i = 0; i < restaurantAddresses.length; i++) {
+            if (restaurantAddresses[i] == restaurant) {
+                restaurantAddresses[i] = restaurantAddresses[
+                    restaurantAddresses.length - 1
+                ];
+                restaurantAddresses.pop();
+                break;
+            }
         }
-
-        restaurants.pop();
-        delete restaurantIndices[restaurant];
-        isRegistered[restaurant] = false;
 
         emit RestaurantRemoved(restaurant);
     }
 
-    // Get restaurants sorted by custom ratio
+    // Function to get restaurants sorted by custom ratio in ascending order
     function getRestaurantsByRatio() external view returns (string[] memory) {
-        uint256 length = restaurants.length;
+        uint256 length = restaurantAddresses.length;
         RestaurantInfo[] memory sortedRestaurants = new RestaurantInfo[](
             length
         );
+        address[] memory sortedAddresses = new address[](length);
 
-        // Copy restaurants array for sorting
         for (uint i = 0; i < length; i++) {
-            sortedRestaurants[i] = restaurants[i];
+            sortedRestaurants[i] = restaurants[restaurantAddresses[i]];
+            sortedAddresses[i] = restaurantAddresses[i];
         }
 
-        // Sort restaurants by custom ratio (ascending)
         for (uint i = 0; i < length; i++) {
             for (uint j = i + 1; j < length; j++) {
                 if (
-                    _calculateCustomRatio(
-                        sortedRestaurants[i].restaurantAddress
-                    ) >
-                    _calculateCustomRatio(
-                        sortedRestaurants[j].restaurantAddress
-                    )
+                    _calculateCustomRatio(sortedAddresses[i]) >
+                    _calculateCustomRatio(sortedAddresses[j])
                 ) {
                     (sortedRestaurants[i], sortedRestaurants[j]) = (
                         sortedRestaurants[j],
                         sortedRestaurants[i]
+                    );
+                    (sortedAddresses[i], sortedAddresses[j]) = (
+                        sortedAddresses[j],
+                        sortedAddresses[i]
                     );
                 }
             }
@@ -190,15 +156,11 @@ contract PaymentContract {
             results[i] = string(
                 abi.encodePacked(
                     "Restaurant Address: ",
-                    toAsciiString(sortedRestaurants[i].restaurantAddress),
+                    toAsciiString(sortedAddresses[i]),
                     ", Google Map ID: ",
                     sortedRestaurants[i].googlemap_id,
                     ", Custom Ratio: ",
-                    uintToString(
-                        _calculateCustomRatio(
-                            sortedRestaurants[i].restaurantAddress
-                        )
-                    )
+                    uintToString(_calculateCustomRatio(sortedAddresses[i]))
                 )
             );
         }
@@ -206,10 +168,13 @@ contract PaymentContract {
         return results;
     }
 
-    // Modified payment function to credit balance instead of direct transfer
-    function pay(address restaurant, uint256 usdtAmount) public {
+    // Function to process payment
+    function pay(address restaurant, uint256 usdtAmount) external {
         require(restaurant != address(0), "Invalid restaurant address");
-        require(isRegistered[restaurant], "Restaurant not registered");
+        require(
+            bytes(restaurants[restaurant].googlemap_id).length != 0,
+            "Restaurant not registered"
+        );
         require(usdtAmount > 0, "Amount must be greater than zero");
 
         _cleanupOldData(restaurantVolumes[restaurant]);
@@ -219,14 +184,8 @@ contract PaymentContract {
         _updateVolumes(restaurant, usdtAmount);
 
         uint256 adjustedAmount = (usdtAmount * customRatio) / 1e18;
-
-        // Transfer USDT from sender to this contract
         usdtToken.safeTransferFrom(msg.sender, address(this), adjustedAmount);
-
-        // Update the restaurant's balance
-        balances[restaurant] += adjustedAmount;
-
-        emit BalanceUpdated(restaurant, balances[restaurant]);
+        restaurants[restaurant].balance += adjustedAmount;
 
         emit PaymentProcessed(
             msg.sender,
@@ -237,22 +196,29 @@ contract PaymentContract {
         );
     }
 
-    // Function for restaurants to redeem their USDT balance
-    function redeem() external onlyRegisteredRestaurant {
-        uint256 amount = balances[msg.sender];
-        require(amount > 0, "No balance to redeem");
-
-        // Reset the balance before transfer to prevent re-entrancy
-        balances[msg.sender] = 0;
-        emit BalanceUpdated(msg.sender, balances[msg.sender]);
-
-        // Transfer USDT to the restaurant
-        usdtToken.safeTransfer(msg.sender, amount);
-
-        emit Redemption(msg.sender, amount);
+    // Function to get the balance of a restaurant
+    function balanceOf(address restaurant) external view returns (uint256) {
+        require(
+            bytes(restaurants[restaurant].googlemap_id).length != 0,
+            "Restaurant not registered"
+        );
+        return restaurants[restaurant].balance;
     }
 
-    // Internal function to update volume data
+    // Function for restaurants to redeem their balance
+    function redeemBalance(uint256 amount) external onlyRegisteredRestaurant {
+        require(amount > 0, "Amount must be greater than zero");
+        require(
+            restaurants[msg.sender].balance >= amount,
+            "Insufficient balance"
+        );
+
+        restaurants[msg.sender].balance -= amount;
+        usdtToken.safeTransfer(msg.sender, amount);
+
+        emit BalanceRedeemed(msg.sender, amount);
+    }
+
     function _updateVolumes(address restaurant, uint256 usdtAmount) internal {
         uint256 currentTime = block.timestamp;
 
@@ -267,7 +233,6 @@ contract PaymentContract {
         _cleanupOldData(totalVolumes);
     }
 
-    // Internal function to clean up old volume data beyond the time window
     function _cleanupOldData(VolumeData[] storage volumes) internal {
         uint256 cutoffTime = block.timestamp - timeWindow;
 
@@ -296,7 +261,6 @@ contract PaymentContract {
         }
     }
 
-    // Internal function to calculate custom ratio based on volumes
     function _calculateCustomRatio(
         address restaurant
     ) public view returns (uint256) {
@@ -327,7 +291,6 @@ contract PaymentContract {
         return currentRatio < minRatio ? minRatio : currentRatio;
     }
 
-    // Internal function to get total volume from volume data
     function _getTotalVolume(
         VolumeData[] storage volumes
     ) internal view returns (uint256) {
@@ -340,9 +303,6 @@ contract PaymentContract {
 
     // Helper function to convert uint to string
     function uintToString(uint v) internal pure returns (string memory) {
-        if (v == 0) {
-            return "0";
-        }
         uint maxlength = 100;
         bytes memory reversed = new bytes(maxlength);
         uint i = 0;
@@ -372,7 +332,6 @@ contract PaymentContract {
         return string(s);
     }
 
-    // Helper function for toAsciiString
     function char(bytes1 b) internal pure returns (bytes1 c) {
         if (uint8(b) < 10) return bytes1(uint8(b) + 0x30);
         else return bytes1(uint8(b) + 0x57);
