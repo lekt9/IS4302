@@ -38,8 +38,8 @@ export class RestaurantService {
     return Promise.all(
       restaurants.map(async (restaurant) => {
         try {
-          // Get restaurant address using Google Maps ID
-          const restaurantAddress = await this.paymentContract.getRestaurantAddressByGoogleMapId(restaurant.id);
+          // Get restaurant address by searching through the restaurants array
+          const restaurantAddress = await this.findRestaurantAddress(restaurant.id);
           const isRegistered = restaurantAddress !== ethers.constants.AddressZero;
 
           if (!isRegistered) {
@@ -76,21 +76,43 @@ export class RestaurantService {
     );
   }
 
+  private async findRestaurantAddress(googleMapId: string): Promise<string> {
+    try {
+      let restaurantCount = await this.paymentContract.restaurants.length;
+      for (let i = 0; i < restaurantCount; i++) {
+        const restaurant = await this.paymentContract.restaurants(i);
+        if (restaurant.googlemap_id === googleMapId) {
+          return restaurant.restaurantAddress;
+        }
+      }
+      return ethers.constants.AddressZero;
+    } catch (error) {
+      console.error('Error finding restaurant address:', error);
+      return ethers.constants.AddressZero;
+    }
+  }
+
   async processPayment(
     googleMapId: string,
     amount: ethers.BigNumber
   ): Promise<ethers.ContractTransaction> {
     try {
-      // First approve USDT spending
+      // First get restaurant address
+      const restaurantAddress = await this.findRestaurantAddress(googleMapId);
+      if (restaurantAddress === ethers.constants.AddressZero) {
+        throw new Error('Restaurant not found');
+      }
+
+      // Approve USDT spending
       const approvalTx = await this.usdtContract.approve(
         this.paymentContract.address,
         amount
       );
       await approvalTx.wait();
   
-      // Use the new payByGoogleMapId function
-      return await this.paymentContract.payByGoogleMapId(
-        googleMapId,
+      // Use pay function with found address
+      return await this.paymentContract.pay(
+        restaurantAddress,
         amount,
         {
           gasLimit: 300000
@@ -104,7 +126,7 @@ export class RestaurantService {
 
   private async isRestaurantRegistered(googleMapId: string): Promise<boolean> {
     try {
-      const restaurantAddress = await this.paymentContract.getRestaurantAddressByGoogleMapId(googleMapId);
+      const restaurantAddress = await this.findRestaurantAddress(googleMapId);
       return restaurantAddress !== ethers.constants.AddressZero;
     } catch (error) {
       console.error('Error checking restaurant registration:', error);
@@ -117,7 +139,9 @@ export class RestaurantService {
       const volumes = await this.paymentContract.restaurantVolumes(restaurantAddress);
       let total = ethers.BigNumber.from(0);
       for (const volume of volumes) {
-        total = total.add(volume.amount);
+        if (volume && volume.amount) {
+          total = total.add(volume.amount);
+        }
       }
       return total;
     } catch (error) {
