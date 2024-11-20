@@ -71,27 +71,85 @@ export default function HomePage() {
     }
   }, []);
 
+  // useEffect(() => {
+  //   const fetchRestaurants = async () => {
+  //     try {
+  //       if (!provider || !coordinates) return;
+
+  //       // Get registered restaurants from blockchain
+  //       const blockchainService = new BlockchainService(provider);
+  //       const registeredRestaurants = await blockchainService.getRegisteredRestaurants();
+        
+  //       // Get restaurant details from API
+  //       const response = await fetch(
+  //         `/api/restaurants?lat=${coordinates.lat}&lng=${coordinates.lng}&placeIds=${
+  //           registeredRestaurants.map(r => r.id).join(',')
+  //         }`
+  //       );
+        
+  //       if (!response.ok) throw new Error('Failed to fetch restaurants');
+  //       const apiRestaurants = await response.json();
+        
+  //       // Merge blockchain data with API data
+  //       const mergedRestaurants = apiRestaurants.map((restaurant: any) => {
+  //         const blockchainData = registeredRestaurants.find(r => r.id === restaurant.id);
+  //         return {
+  //           ...restaurant,
+  //           blockchainData: blockchainData ? {
+  //             isRegistered: true,
+  //             address: blockchainData.contractData.owner,
+  //             discountRate: parseFloat(blockchainData.contractData.discountRate)
+  //           } : {
+  //             isRegistered: false,
+  //             address: '',
+  //             discountRate: 0
+  //           }
+  //         };
+  //       });
+
+  //       setRestaurants(mergedRestaurants);
+  //     } catch (error) {
+  //       console.error('Error fetching restaurants:', error);
+  //       toast.error('Failed to load restaurants');
+  //     } finally {
+  //       setLoading(false);
+  //     }
+  //   };
+
+  //   fetchRestaurants();
+  // }, [provider, coordinates]); // Added coordinates as dependency
+
   useEffect(() => {
     const fetchRestaurants = async () => {
       try {
-        if (!provider || !coordinates) return;
+        // Get restaurants from localStorage
+        const storedData = localStorage.getItem('nearbyRestaurants');
+        if (!storedData) {
+          toast.error('No restaurants data found');
+          return;
+        }
 
-        // Get registered restaurants from blockchain
+        const { restaurants: localRestaurants } = JSON.parse(storedData);
+
+        if (!provider) {
+          // If no provider, just use the local data without blockchain info
+          setRestaurants(localRestaurants.map((restaurant: any) => ({
+            ...restaurant,
+            blockchainData: {
+              isRegistered: false,
+              address: '',
+              discountRate: 0
+            }
+          })));
+          return;
+        }
+
+        // If provider exists, enhance with blockchain data
         const blockchainService = new BlockchainService(provider);
         const registeredRestaurants = await blockchainService.getRegisteredRestaurants();
         
-        // Get restaurant details from API
-        const response = await fetch(
-          `/api/restaurants?lat=${coordinates.lat}&lng=${coordinates.lng}&placeIds=${
-            registeredRestaurants.map(r => r.id).join(',')
-          }`
-        );
-        
-        if (!response.ok) throw new Error('Failed to fetch restaurants');
-        const apiRestaurants = await response.json();
-        
-        // Merge blockchain data with API data
-        const mergedRestaurants = apiRestaurants.map((restaurant: any) => {
+        // Merge blockchain data with local data
+        const mergedRestaurants = localRestaurants.map((restaurant: any) => {
           const blockchainData = registeredRestaurants.find(r => r.id === restaurant.id);
           return {
             ...restaurant,
@@ -109,7 +167,7 @@ export default function HomePage() {
 
         setRestaurants(mergedRestaurants);
       } catch (error) {
-        console.error('Error fetching restaurants:', error);
+        console.error('Error processing restaurants:', error);
         toast.error('Failed to load restaurants');
       } finally {
         setLoading(false);
@@ -117,7 +175,7 @@ export default function HomePage() {
     };
 
     fetchRestaurants();
-  }, [provider, coordinates]); // Added coordinates as dependency
+  }, [provider]); // Only depend on provider changes
 
   const getPhotoUrl = (photoReference: string) => {
     return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoReference}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`;
@@ -185,7 +243,7 @@ export default function HomePage() {
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">Registered Restaurants Near You</h1>
+      <h1 className="text-2xl font-bold mb-4 text-center">Restaurants Near You</h1>
       {restaurants.length === 0 ? (
         <div className="text-center py-8">
           <p className="text-gray-600">No registered restaurants found in your area.</p>

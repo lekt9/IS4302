@@ -31,6 +31,10 @@ export default function RestaurantDetailPage() {
   const [blockchainData, setBlockchainData] = useState<BlockchainData | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const handleBackToHome = () => {
+    router.push('/'); // Navigate to the home page
+  };
+
   useEffect(() => {
     const fetchRestaurantDetails = async () => {
       try {
@@ -102,6 +106,16 @@ export default function RestaurantDetailPage() {
 
   return (
     <div className="max-w-2xl mx-auto p-4">
+ 
+      {/* Navigation Section */}
+      <div className="mb-4">
+        <button
+          onClick={handleBackToHome}
+          className="bg-yellow-500 text-white px-3 py-2 rounded-full hover:bg-blue-600 transition-colors text-sm"
+        >
+          Back
+        </button>
+      </div>
       {/* Restaurant Photo */}
       <div className="relative h-64 w-full mb-6 rounded-lg overflow-hidden">
         {restaurant.photos?.[0] && (
@@ -198,6 +212,7 @@ export default function RestaurantDetailPage() {
             Visit Website
           </a>
         )}
+      {/* Back to Home Button */}
 
         {/* Action Buttons */}
         <div className="sticky bottom-4 flex gap-4 mt-8">
@@ -216,13 +231,6 @@ export default function RestaurantDetailPage() {
                 disabled={!blockchainData?.isRegistered}
               >
                 Order Now
-              </button>
-              <button
-                onClick={() => router.push(`/restaurants/${gmaps_id}_${contractAddress}/reserve`)}
-                className="w-full bg-white text-gray-900 font-semibold py-3 px-6 rounded-lg border-2 border-yellow-400 hover:bg-yellow-50 transition-colors"
-                disabled={!blockchainData?.isRegistered || !contractAddress}
-              >
-                Reserve Table
               </button>
             </>
           )}
