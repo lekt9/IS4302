@@ -12,4 +12,9 @@ contract MockUSDT is ERC20 {
     function decimals() public view virtual override returns (uint8) {
         return 6;
     }
-} 
+
+    // Function to mint tokens for other addresses
+    function mint(address to, uint256 amount) public {
+        _mint(to, amount);
+    }
+}

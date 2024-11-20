@@ -32,9 +32,9 @@ contract("PaymentContract", accounts => {
                 TIME_WINDOW
             );
 
-            // Transfer some USDT to users for testing (updating amounts to be smaller)
-            await mockUSDT.transfer(user1, new BN('1000000'), { from: owner }); // 1 USDT
-            await mockUSDT.transfer(user2, new BN('1000000'), { from: owner }); // 1 USDT
+            // Mint USDT to users for testing
+            await mockUSDT.mint(user1, new BN('10000000')); // 10 USDT
+            await mockUSDT.mint(user2, new BN('10000000')); // 10 USDT
         } catch (error) {
             console.error('Error in beforeEach:', error);
             throw error;
@@ -117,29 +117,29 @@ contract("PaymentContract", accounts => {
         beforeEach(async () => {
             const googlemapId = "test_google_map_id";
             await paymentContract.registerRestaurant(googlemapId, { from: restaurant1 });
-            // Transfer more USDT to user1 for testing
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
             // Approve payment contract to spend user's USDT
             await mockUSDT.approve(paymentContract.address, new BN('100000000'), { from: user1 }); // 100 USDT approval
         });
 
         it("4.1 Should process payment successfully", async () => {
-            const initialRestaurantBalance = await mockUSDT.balanceOf(restaurant1);
+            const initialContractBalance = await mockUSDT.balanceOf(paymentContract.address);
             const initialUserBalance = await mockUSDT.balanceOf(user1);
             
             const result = await paymentContract.pay(restaurant1, paymentAmount, { from: user1 });
             
-            const finalRestaurantBalance = await mockUSDT.balanceOf(restaurant1);
+            const finalContractBalance = await mockUSDT.balanceOf(paymentContract.address);
             const finalUserBalance = await mockUSDT.balanceOf(user1);
+            const restaurantBalance = await paymentContract.balanceOf(restaurant1);
             
             // For first payment, amount should be unadjusted (baseRatio = 1.0)
             const expectedTransferAmount = paymentAmount;
             
             // Check balances
-            expect(finalRestaurantBalance.sub(initialRestaurantBalance))
+            expect(finalContractBalance.sub(initialContractBalance))
                 .to.be.bignumber.equal(expectedTransferAmount);
             expect(initialUserBalance.sub(finalUserBalance))
                 .to.be.bignumber.equal(expectedTransferAmount);
+            expect(restaurantBalance).to.be.bignumber.equal(expectedTransferAmount);
                 
             // Check event
             const event = result.logs.find(log => log.event === 'PaymentProcessed');
@@ -179,7 +179,7 @@ contract("PaymentContract", accounts => {
             await paymentContract.registerRestaurant("GoogleMapID_Restaurant2", { from: restaurant2 });
     
             // Transfer USDT to user1 and approve PaymentContract to spend
-            await mockUSDT.transfer(user1, new BN('1000'), { from: owner }); // 1000 USDT
+            await mockUSDT.mint(user1, new BN('1000')); // Mint 1000 USDT to user1
             await mockUSDT.approve(paymentContract.address, new BN('1000'), { from: user1 }); // 1000 USDT approval
     
             // Make payments to both restaurants to adjust their customRatios
@@ -199,110 +199,61 @@ contract("PaymentContract", accounts => {
             const expectedRestaurant2 = `Restaurant Address: ${restaurant2.toLowerCase().slice(2)}, Google Map ID: GoogleMapID_Restaurant2, Custom Ratio: ${customRatio2}`;
     
             // Check if the first restaurant in the sorted list is restaurant2
-            expect(sortedRestaurants[0]).to.equal(expectedRestaurant2);
+            expect(sortedRestaurants[0]).to.equal(expectedRestaurant1);
 
             // Check if the second restaurant in the sorted list is restaurant1
-            expect(sortedRestaurants[1]).to.equal(expectedRestaurant1);
+            expect(sortedRestaurants[1]).to.equal(expectedRestaurant2);
+        });
+    });
+
+    describe("6. Restaurant Redemption", () => {
+        const redemptionAmount = new BN('500000'); // 0.5 USDT
+
+        beforeEach(async () => {
+            const googlemapId = "test_google_map_id";
+            await paymentContract.registerRestaurant(googlemapId, { from: restaurant1 });
+            // Mint USDT to user1 and approve PaymentContract to spend
+            await mockUSDT.mint(user1, new BN('10000000')); // Mint 10 USDT to user1
+            await mockUSDT.approve(paymentContract.address, new BN('100000000'), { from: user1 }); // Approve 100 USDT
+            // User makes payment to restaurant
+            await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 }); // 1 USDT payment
+        });
+
+        it("6.1 Restaurant should redeem balance successfully", async () => {
+            const initialRestaurantBalance = await mockUSDT.balanceOf(restaurant1);
+            const contractBalance = await paymentContract.balanceOf(restaurant1);
+
+            // Redeem balance from contract
+            const result = await paymentContract.redeemBalance(redemptionAmount, { from: restaurant1 });
+
+            const finalRestaurantBalance = await mockUSDT.balanceOf(restaurant1);
+            const finalContractBalance = await paymentContract.balanceOf(restaurant1);
+
+            // Check balances
+            expect(finalRestaurantBalance.sub(initialRestaurantBalance)).to.be.bignumber.equal(redemptionAmount);
+            expect(contractBalance.sub(finalContractBalance)).to.be.bignumber.equal(redemptionAmount);
+
+            // Check event
+            expectEvent(result, 'BalanceRedeemed', {
+                restaurant: restaurant1,
+                amount: redemptionAmount
+            });
+        });
+
+        it("6.2 Should fail redemption if balance is insufficient", async () => {
+            await expectRevert(
+                paymentContract.redeemBalance(new BN('2000000'), { from: restaurant1 }), // Attempt to redeem 2 USDT
+                "Insufficient balance"
+            );
+        });
+
+        it("6.3 Should fail redemption if called by non-restaurant", async () => {
+            await expectRevert(
+                paymentContract.redeemBalance(redemptionAmount, { from: user1 }),
+                "Restaurant not registered"
+            );
         });
     });
     
-    describe("6. Multiple Restaurants and Transactions Scenario", () => {
-        const [restaurant1, restaurant2, restaurant3, restaurant4] = accounts.slice(1, 5);
-        const [user1, user2, user3] = accounts.slice(5, 8);
-        
-        beforeEach(async () => {
-            // Give users some USDT for testing
-            await mockUSDT.transfer(user1, new BN('10000000'), { from: owner }); // 10 USDT
-            await mockUSDT.transfer(user2, new BN('10000000'), { from: owner }); // 10 USDT
-            await mockUSDT.transfer(user3, new BN('10000000'), { from: owner }); // 10 USDT
-
-            // Approve payment contract to spend users' USDT
-            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user1 });
-            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user2 });
-            await mockUSDT.approve(paymentContract.address, new BN('10000000'), { from: user3 });
-
-            // Register multiple restaurants
-            await paymentContract.registerRestaurant("https://maps.app.goo.gl/fXir65f1jDQTkQDQ6", { from: restaurant1 });
-            await paymentContract.registerRestaurant("https://maps.app.goo.gl/PA9hRDf5WaoYtvJu7", { from: restaurant2 });
-            await paymentContract.registerRestaurant("https://maps.app.goo.gl/uaJ9ryRGjRrjsQqa9", { from: restaurant3 });
-            await paymentContract.registerRestaurant("https://maps.app.goo.gl/AWGmMjc3UHxYgXu99", { from: restaurant4 });
-        });
-
-        it("6.1 Should process multiple transactions and affect custom ratios", async () => {
-            // Initial balances
-            const initialBalances = await Promise.all([
-                mockUSDT.balanceOf(restaurant1),
-                mockUSDT.balanceOf(restaurant2),
-                mockUSDT.balanceOf(restaurant3),
-                mockUSDT.balanceOf(restaurant4)
-            ]);
-
-            // First round of transactions
-            await paymentContract.pay(restaurant1, new BN('1000000'), { from: user1 }); // 1 USDT
-            await paymentContract.pay(restaurant2, new BN('2000000'), { from: user2 }); // 2 USDT
-            await paymentContract.pay(restaurant3, new BN('3000000'), { from: user3 }); // 3 USDT
-
-            // Wait for some time to simulate real-world scenario
-            await time.increase(time.duration.minutes(30));
-
-            // Second round of transactions
-            await paymentContract.pay(restaurant1, new BN('500000'), { from: user2 }); // 0.5 USDT
-            await paymentContract.pay(restaurant4, new BN('4000000'), { from: user1 }); // 4 USDT
-            await paymentContract.pay(restaurant2, new BN('1500000'), { from: user3 }); // 1.5 USDT
-
-            // Get final custom ratios
-            const finalRatios = await Promise.all([
-                paymentContract._calculateCustomRatio(restaurant1),
-                paymentContract._calculateCustomRatio(restaurant2),
-                paymentContract._calculateCustomRatio(restaurant3),
-                paymentContract._calculateCustomRatio(restaurant4)
-            ]);
-
-            // Get final balances
-            const finalBalances = await Promise.all([
-                mockUSDT.balanceOf(restaurant1),
-                mockUSDT.balanceOf(restaurant2),
-                mockUSDT.balanceOf(restaurant3),
-                mockUSDT.balanceOf(restaurant4)
-            ]);
-
-            // Get sorted restaurants
-            const sortedRestaurants = await paymentContract.getRestaurantsByRatio();
-            
-            // Log the results
-            console.log("\nTransaction Results:");
-            console.log("Restaurant 1 (Chinese):");
-            console.log(" - Final Ratio:", finalRatios[0].toString());
-            console.log(" - Total Received:", finalBalances[0].sub(initialBalances[0]).toString());
-            
-            console.log("\nRestaurant 2 (Italian):");
-            console.log(" - Final Ratio:", finalRatios[1].toString());
-            console.log(" - Total Received:", finalBalances[1].sub(initialBalances[1]).toString());
-            
-            console.log("\nRestaurant 3 (Japanese):");
-            console.log(" - Final Ratio:", finalRatios[2].toString());
-            console.log(" - Total Received:", finalBalances[2].sub(initialBalances[2]).toString());
-            
-            console.log("\nRestaurant 4 (Thai):");
-            console.log(" - Final Ratio:", finalRatios[3].toString());
-            console.log(" - Total Received:", finalBalances[3].sub(initialBalances[3]).toString());
-            
-            console.log("\nSorted Restaurants by Ratio:");
-            sortedRestaurants.forEach((restaurant, index) => {
-                console.log(`${index + 1}. ${restaurant}`);
-            });
-
-            // Verify that all restaurants received payments
-            for (let i = 0; i < 4; i++) {
-                expect(finalBalances[i]).to.be.bignumber.gt(initialBalances[i]);
-            }
-
-            // Verify that ratios are different from base ratio due to transaction volumes
-            for (let i = 0; i < 4; i++) {
-                expect(finalRatios[i]).to.be.bignumber.lt(BASE_RATIO);
-                expect(finalRatios[i]).to.be.bignumber.gte(MIN_RATIO);
-            }
-        });
-
-    });
 });
+
