@@ -141,11 +141,24 @@ export default function RegisterPage() {
       toast.success('Restaurant registered successfully!');
       
       // Navigate to restaurant detail page with both IDs
-      const contractAddress = await localContract.getAddress();
-      router.push(`/restaurants/${googleMapId}_${contractAddress}`);
+      const contractAddress = localContract.address;
+      const restaurantPath = `${googleMapId}_${contractAddress}`;
+      
+      // Log the path to help with debugging
+      console.log('Navigating to:', `/restaurants/${restaurantPath}`);
+      
+      // Add a small delay to ensure the contract transaction is fully processed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      router.push(`/restaurants/${restaurantPath}`);
     } catch (error) {
       console.error('Registration error:', error);
       let errorMessage = 'Failed to register restaurant';
+    //   const contractAddress = localContract.address;
+    //   router.push(`/restaurants/${googleMapId}_${contractAddress}`);
+    // } catch (error) {
+    //   console.error('Registration error:', error);
+    //   let errorMessage = 'Failed to register restaurant';
       
       const placeError = error as PlaceError;
       if (placeError.data?.message === 'revert') {

@@ -87,7 +87,7 @@ export class RestaurantService {
         amount
       );
       await approvalTx.wait();
-
+  
       // Use the new payByGoogleMapId function
       return await this.paymentContract.payByGoogleMapId(
         googleMapId,
