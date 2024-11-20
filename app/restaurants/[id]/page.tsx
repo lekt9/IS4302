@@ -21,7 +21,11 @@ export default function RestaurantDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { id: mergedId } = params;
-  const [gmaps_id, contractAddress] = typeof mergedId === 'string' ? mergedId.split('_') : [];
+    // Decode the IDs after splitting
+    const [encodedGmapsId, encodedContractAddress] = typeof mergedId === 'string' ? mergedId.split('_') : [];
+    const gmaps_id = decodeURIComponent(encodedGmapsId);
+    const contractAddress = decodeURIComponent(encodedContractAddress);
+    
   const { paymentContract, usdtContract, isConnected, connectWallet } = useWeb3();
   const [restaurant, setRestaurant] = useState<RestaurantDetails | null>(null);
   const [blockchainData, setBlockchainData] = useState<BlockchainData | null>(null);
@@ -30,6 +34,7 @@ export default function RestaurantDetailPage() {
   useEffect(() => {
     const fetchRestaurantDetails = async () => {
       try {
+        console.log('Fetching details for:', gmaps_id);
         const response = await fetch(`/api/restaurants/${gmaps_id}`);
         
         if (!response.ok) {
