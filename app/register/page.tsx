@@ -14,12 +14,58 @@ interface Place {
   contractAddress?: string;
 }
 
-interface PlaceError {
-  data?: {
-    message?: string;
-    reason?: string;
-  };
-}
+const debugContract = async (contract: ethers.Contract, googleMapId: string) => {
+  try {
+    console.log('Debug Contract State:', {
+      contractAddress: contract.address,
+      googleMapId,
+      signerAddress: await contract.signer.getAddress()
+    });
+
+    // Debug contract functions
+    console.log('Contract functions:', {
+      restaurants: contract.interface.getFunction('restaurants'),
+      registerRestaurant: contract.interface.getFunction('registerRestaurant')
+    });
+
+    // Try to get all restaurants
+    console.log('Attempting to read restaurant data...');
+    let restaurantCount;
+    try {
+      const restaurants = await contract.restaurants;
+      restaurantCount = restaurants.length;
+      console.log('Total restaurants:', restaurantCount);
+    } catch (e) {
+      console.log('Error reading restaurant count:', e);
+    }
+
+    // Try to get specific restaurant
+    try {
+      const restaurantInfo = await contract.restaurants(googleMapId);
+      console.log('Restaurant info by ID:', restaurantInfo);
+    } catch (e) {
+      console.log('Error reading specific restaurant:', e);
+    }
+  } catch (error) {
+    console.error('Debug contract error:', error);
+  }
+};
+
+const verifyContract = async (contract: ethers.Contract) => {
+  try {
+    const owner = await contract.owner();
+    const signer = await contract.signer.getAddress();
+    console.log('Contract verification:', {
+      owner,
+      signer,
+      address: contract.address
+    });
+    return true;
+  } catch (error) {
+    console.error('Contract verification failed:', error);
+    return false;
+  }
+};
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -30,19 +76,34 @@ export default function RegisterPage() {
   const [searchResults, setSearchResults] = useState<Place[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [localContract, setLocalContract] = useState<ethers.Contract | null>(null);
+  const [contractVerified, setContractVerified] = useState(false);
 
   useEffect(() => {
     const initializeContract = async () => {
       if (signer) {
         try {
+          console.log('Initializing contract with:', {
+            address: process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS,
+            signer: await signer.getAddress()
+          });
+
           const contract = new ethers.Contract(
             process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS!,
             PaymentContractABI,
             signer
           );
-          setLocalContract(contract);
+
+          const isVerified = await verifyContract(contract);
+          if (isVerified) {
+            setLocalContract(contract);
+            setContractVerified(true);
+            console.log('Contract initialized and verified');
+          } else {
+            toast.error('Contract verification failed');
+          }
         } catch (error) {
-          console.error('Error initializing contract:', error);
+          console.error('Contract initialization error:', error);
+          toast.error('Failed to initialize contract');
         }
       }
     };
@@ -54,6 +115,7 @@ export default function RegisterPage() {
     if (!searchQuery.trim()) return;
     
     try {
+      console.log('Searching places with query:', searchQuery);
       toast.loading('Searching restaurants...');
       const response = await fetch('/api/places/search', {
         method: 'POST',
@@ -64,43 +126,73 @@ export default function RegisterPage() {
       });
       
       const data = await response.json();
+      console.log('Search results:', data);
       setSearchResults(data.results || []);
       toast.dismiss();
     } catch (error) {
-      console.error('Error searching places:', error);
+      console.error('Search error:', error);
       toast.error('Failed to search places');
     }
   };
 
-  const checkIfRestaurantRegistered = async (googleMapId: string) => {
+  const checkRegistrationStatus = async (googleMapId: string) => {
+    if (!localContract) return false;
+
     try {
-      const restaurantInfo = await localContract?.restaurants(googleMapId);
-      return restaurantInfo && restaurantInfo.googlemap_id !== '';
+      // Try different ways to check registration
+      console.log('Checking registration for:', googleMapId);
+      
+      // Method 1: Direct call
+      try {
+        const restaurantInfo = await localContract.restaurants(googleMapId);
+        console.log('Restaurant info:', restaurantInfo);
+        if (restaurantInfo && restaurantInfo.googlemap_id) {
+          return true;
+        }
+      } catch (e) {
+        console.log('Method 1 check failed:', e);
+      }
+
+      // Method 2: Event check
+      try {
+        const filter = localContract.filters.RestaurantRegistered(null, googleMapId);
+        const events = await localContract.queryFilter(filter);
+        console.log('Registration events:', events);
+        if (events.length > 0) {
+          return true;
+        }
+      } catch (e) {
+        console.log('Method 2 check failed:', e);
+      }
+
+      return false;
     } catch (error) {
-      console.error('Error checking restaurant registration:', error);
+      console.error('Registration check error:', error);
       return false;
     }
   };
 
   const handlePlaceSelect = async (place: Place) => {
+    console.log('Selected place:', place);
     setSelectedPlace(place);
     setGoogleMapId(place.place_id);
     setSearchResults([]);
 
-    // Check if restaurant is already registered
-    const isRegistered = await checkIfRestaurantRegistered(place.place_id);
-    if (isRegistered) {
-      toast.error('This restaurant is already registered');
-      setGoogleMapId('');
-      setSelectedPlace(null);
-    } else {
-      toast.success('Restaurant selected');
+    if (localContract) {
+      const isRegistered = await checkRegistrationStatus(place.place_id);
+      if (isRegistered) {
+        toast.error('This restaurant is already registered');
+        setGoogleMapId('');
+        setSelectedPlace(null);
+      } else {
+        toast.success('Restaurant selected');
+      }
     }
   };
 
   const handleRegister = async () => {
-    if (!isConnected) {
-      toast.error('Please connect your wallet first');
+    if (!isConnected || !localContract) {
+      toast.error('Please check wallet connection');
       return;
     }
 
@@ -109,92 +201,89 @@ export default function RegisterPage() {
       return;
     }
 
-    if (!localContract) {
-      toast.error('Contract not initialized');
-      return;
-    }
-
-    // Double check registration status before proceeding
-    const isRegistered = await checkIfRestaurantRegistered(googleMapId);
-    if (isRegistered) {
-      toast.error('This restaurant is already registered');
-      setGoogleMapId('');
-      setSelectedPlace(null);
+    if (!contractVerified) {
+      toast.error('Contract not properly initialized');
       return;
     }
 
     setLoading(true);
     try {
-      console.log('Registering restaurant with ID:', googleMapId);
-      console.log('Using contract address:', process.env.NEXT_PUBLIC_PAYMENT_CONTRACT_ADDRESS);
-      
-      const tx = await localContract.registerRestaurant(googleMapId, {
-        gasLimit: 200000
+      // Debug current state
+      await debugContract(localContract, googleMapId);
+
+      // Final registration check
+      const isRegistered = await checkRegistrationStatus(googleMapId);
+      if (isRegistered) {
+        toast.error('Restaurant is already registered');
+        setLoading(false);
+        return;
+      }
+
+      console.log('Proceeding with registration:', {
+        googleMapId,
+        contractAddress: localContract.address,
+        signer: await localContract.signer.getAddress()
       });
+
+      // Estimate gas first
+      let gasLimit;
+      try {
+        const estimate = await localContract.estimateGas.registerRestaurant(googleMapId);
+        gasLimit = estimate.mul(120).div(100); // Add 20% buffer
+        console.log('Estimated gas limit:', gasLimit.toString());
+      } catch (e) {
+        console.log('Gas estimation failed, using default:', e);
+        gasLimit = ethers.BigNumber.from(500000);
+      }
+
+      const tx = await localContract.registerRestaurant(googleMapId, {
+        gasLimit,
+      });
+
+      console.log('Transaction sent:', tx.hash);
       const loadingToast = toast.loading('Registering restaurant...');
-      console.log('Transaction hash:', tx.hash);
-      
-      await tx.wait();
-      console.log('Transaction confirmed');
-      
+
+      const receipt = await tx.wait();
+      console.log('Transaction receipt:', receipt);
+
       toast.dismiss(loadingToast);
       toast.success('Restaurant registered successfully!');
-      
-      // Navigate to restaurant detail page with both IDs
-      const contractAddress = localContract.address;
-      const restaurantPath = `${googleMapId}_${contractAddress}`;
-      
-      // Log the path to help with debugging
-      console.log('Navigating to:', `/restaurants/${restaurantPath}`);
-      
-      // Add a small delay to ensure the contract transaction is fully processed
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
+      // Navigate to restaurant page
+      const restaurantPath = `${googleMapId}_${localContract.address}`;
+      await new Promise(resolve => setTimeout(resolve, 2000));
       router.push(`/restaurants/${restaurantPath}`);
-    } catch (error) {
-      console.error('Registration error:', error);
-      let errorMessage = 'Failed to register restaurant';
-    //   const contractAddress = localContract.address;
-    //   router.push(`/restaurants/${googleMapId}_${contractAddress}`);
-    // } catch (error) {
-    //   console.error('Registration error:', error);
-    //   let errorMessage = 'Failed to register restaurant';
-      
-      const placeError = error as PlaceError;
-      if (placeError.data?.message === 'revert') {
-        errorMessage = placeError.data?.reason || errorMessage;
+    } catch (error: any) {
+      console.error('Registration error:', {
+        error,
+        code: error.code,
+        message: error.message,
+        data: error.data
+      });
+
+      let errorMessage = 'Registration failed: ';
+      if (error.data?.message?.includes('revert')) {
+        const match = error.data.message.match(/revert\s(.+)/);
+        errorMessage += match ? match[1] : error.data.message;
+      } else if (error.reason) {
+        errorMessage += error.reason;
+      } else if (error.message) {
+        errorMessage += error.message;
       }
-      
+
       toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  if (!isConnected) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-white">
-        <div className="max-w-md w-full space-y-8 text-center">
-          <h1 className="text-4xl font-bold text-gray-900">Register Restaurant</h1>
-          <p className="text-lg text-gray-600">
-            Connect your wallet to register your restaurant and start offering discounts
-          </p>
-          <button
-            onClick={connectWallet}
-            className="w-full bg-yellow-400 text-gray-900 font-semibold py-4 px-6 rounded-full hover:bg-yellow-500 transition-colors"
-          >
-            Connect Wallet
-          </button>
-          <Link href="/" className="block text-sm text-gray-500 hover:text-gray-700">
-            Back to Home
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  // Rest of your component remains the same...
+  // (Keep all your existing UI JSX)
 
   return (
+    // Your existing JSX...
     <div className="flex flex-col items-center min-h-screen p-6 bg-white">
+      {/* Keep your existing UI components */}
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-gray-900">Register Restaurant</h1>

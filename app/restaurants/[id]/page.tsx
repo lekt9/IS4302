@@ -21,15 +21,28 @@ export default function RestaurantDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { id: mergedId } = params;
-    // Decode the IDs after splitting
-    const [encodedGmapsId, encodedContractAddress] = typeof mergedId === 'string' ? mergedId.split('_') : [];
-    const gmaps_id = decodeURIComponent(encodedGmapsId);
-    const contractAddress = decodeURIComponent(encodedContractAddress);
+  const [encodedGmapsId, encodedContractAddress] = typeof mergedId === 'string' ? mergedId.split('_') : [];
+  const gmaps_id = decodeURIComponent(encodedGmapsId);
+  const contractAddress = decodeURIComponent(encodedContractAddress);
     
   const { paymentContract, usdtContract, isConnected, connectWallet } = useWeb3();
   const [restaurant, setRestaurant] = useState<RestaurantDetails | null>(null);
   const [blockchainData, setBlockchainData] = useState<BlockchainData | null>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    console.log('Component State:', {
+      isConnected,
+      blockchainData,
+      contractAddress,
+      loading
+    });
+  }, [isConnected, blockchainData, contractAddress, loading]);
+
+
+  const handleBackToHome = () => {
+    router.push('/');
+  };
 
   useEffect(() => {
     const fetchRestaurantDetails = async () => {
@@ -38,20 +51,28 @@ export default function RestaurantDetailPage() {
         const response = await fetch(`/api/restaurants/${gmaps_id}`);
         
         if (!response.ok) {
-          throw new Error('Failed to fetch restaurant details');
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to fetch restaurant details');
         }
 
         const baseData = await response.json();
+        console.log('Received restaurant data:', baseData);
         
         if (isConnected && paymentContract && usdtContract && contractAddress) {
           const restaurantService = getRestaurantService(paymentContract, usdtContract);
-          console.log(contractAddress);
+          console.log('Enhancing with blockchain data for address:', contractAddress);
           const [enhancedRestaurant] = await restaurantService.enhanceWithBlockchainData([baseData]);
+          
+          console.log('Enhanced restaurant data:', enhancedRestaurant);
           
           if (enhancedRestaurant.blockchainData?.address.toLowerCase() === contractAddress.toLowerCase()) {
             setRestaurant(enhancedRestaurant as RestaurantDetails);
             setBlockchainData(enhancedRestaurant.blockchainData);
           } else {
+            console.log('Address mismatch:', {
+              enhanced: enhancedRestaurant.blockchainData?.address,
+              contract: contractAddress
+            });
             setRestaurant(baseData as RestaurantDetails);
             setBlockchainData(null);
           }
@@ -61,7 +82,7 @@ export default function RestaurantDetailPage() {
         }
       } catch (error) {
         console.error('Error fetching restaurant details:', error);
-        toast.error('Failed to load restaurant details');
+        toast.error(error instanceof Error ? error.message : 'Failed to load restaurant details');
       } finally {
         setLoading(false);
       }
@@ -72,16 +93,58 @@ export default function RestaurantDetailPage() {
     }
   }, [gmaps_id, contractAddress, isConnected, paymentContract, usdtContract]);
 
+  // const handleOrderClick = () => {
+  //   console.log('Order clicked:', { isConnected, isRegistered: blockchainData?.isRegistered, contractAddress });
+
+  //   if (!isConnected) {
+  //     toast.error('Please connect your wallet first');
+  //     return;
+  //   }
+  //   if (!blockchainData?.isRegistered || !contractAddress) {
+  //     toast.error('This restaurant is not registered in our system');
+  //     return;
+  //   }
+  //   // Use encodedGmapsId instead of gmaps_id to maintain URL encoding
+  //   router.push(`/restaurants/${encodedGmapsId}_${contractAddress}/payment`);
+  // };
   const handleOrderClick = () => {
+    console.log('Order clicked - Debug:', {
+      isConnected,
+      blockchainData,
+      isRegistered: blockchainData?.isRegistered,
+      contractAddress,
+      encodedGmapsId,
+      targetUrl: `/restaurants/${encodedGmapsId}_${contractAddress}/payment`
+    });
+  
     if (!isConnected) {
       toast.error('Please connect your wallet first');
       return;
     }
-    if (!blockchainData?.isRegistered || !contractAddress) {
+  
+    // Check if blockchain data exists
+    if (!blockchainData) {
+      toast.error('Restaurant data not loaded properly');
+      return;
+    }
+  
+    // Check registration
+    if (!blockchainData.isRegistered) {
       toast.error('This restaurant is not registered in our system');
       return;
     }
-    router.push(`/restaurants/${gmaps_id}_${contractAddress}/order`);
+  
+    if (!contractAddress) {
+      toast.error('Contract address not found');
+      return;
+    }
+  
+    try {
+      router.push(`/restaurants/${encodedGmapsId}_${contractAddress}/payment`);
+    } catch (error) {
+      console.error('Navigation error:', error);
+      toast.error('Failed to navigate to payment page');
+    }
   };
 
   if (loading) {
@@ -99,9 +162,19 @@ export default function RestaurantDetailPage() {
       </div>
     );
   }
-
+  
   return (
     <div className="max-w-2xl mx-auto p-4">
+ 
+      {/* Navigation Section */}
+      <div className="mb-4">
+        <button
+          onClick={handleBackToHome}
+          className="bg-yellow-500 text-white px-3 py-2 rounded-full hover:bg-blue-600 transition-colors text-sm"
+        >
+          Back
+        </button>
+      </div>
       {/* Restaurant Photo */}
       <div className="relative h-64 w-full mb-6 rounded-lg overflow-hidden">
         {restaurant.photos?.[0] && (
@@ -198,8 +271,10 @@ export default function RestaurantDetailPage() {
             Visit Website
           </a>
         )}
+      {/* Back to Home Button */}
 
         {/* Action Buttons */}
+        
         <div className="sticky bottom-4 flex gap-4 mt-8">
           {!isConnected ? (
             <button
@@ -216,13 +291,6 @@ export default function RestaurantDetailPage() {
                 disabled={!blockchainData?.isRegistered}
               >
                 Order Now
-              </button>
-              <button
-                onClick={() => router.push(`/restaurants/${gmaps_id}_${contractAddress}/reserve`)}
-                className="w-full bg-white text-gray-900 font-semibold py-3 px-6 rounded-lg border-2 border-yellow-400 hover:bg-yellow-50 transition-colors"
-                disabled={!blockchainData?.isRegistered || !contractAddress}
-              >
-                Reserve Table
               </button>
             </>
           )}

@@ -38,9 +38,15 @@ export class RestaurantService {
     return Promise.all(
       restaurants.map(async (restaurant) => {
         try {
-          // Get restaurant address by searching through the restaurants array
+          console.log('Enhancing restaurant data for:', restaurant.id);
           const restaurantAddress = await this.findRestaurantAddress(restaurant.id);
           const isRegistered = restaurantAddress !== ethers.constants.AddressZero;
+
+          console.log('Restaurant registration status:', {
+            id: restaurant.id,
+            address: restaurantAddress,
+            isRegistered
+          });
 
           if (!isRegistered) {
             return {
@@ -59,7 +65,7 @@ export class RestaurantService {
             this.getRestaurantVolume(restaurantAddress)
           ]);
 
-          return {
+          const enhancedData = {
             ...restaurant,
             blockchainData: {
               address: restaurantAddress,
@@ -68,8 +74,11 @@ export class RestaurantService {
               isRegistered: true
             }
           };
+
+          console.log('Enhanced restaurant data:', enhancedData);
+          return enhancedData;
         } catch (error) {
-          console.error(`Error fetching blockchain data for restaurant ${restaurant.id}:`, error);
+          console.error(`Error enhancing restaurant ${restaurant.id}:`, error);
           return restaurant;
         }
       })
@@ -78,17 +87,34 @@ export class RestaurantService {
 
   private async findRestaurantAddress(googleMapId: string): Promise<string> {
     try {
-      let restaurantCount = await this.paymentContract.restaurants.length;
-      for (let i = 0; i < restaurantCount; i++) {
-        const restaurant = await this.paymentContract.restaurants(i);
-        if (restaurant.googlemap_id === googleMapId) {
-          return restaurant.restaurantAddress;
+      console.log('Finding restaurant address for:', googleMapId);
+      
+      const filter = this.paymentContract.filters.RestaurantRegistered();
+      const events = await this.paymentContract.queryFilter(filter);
+      
+      for (const event of events) {
+        if (!event.args) continue;
+        const restaurantAddress = event.args.restaurantAddress;
+        
+        // Validate the address before using it
+        if (!ethers.utils.isAddress(restaurantAddress)) {
+          console.warn('Invalid address found:', restaurantAddress);
+          continue;
+        }
+        
+        const restaurantData = await this.paymentContract.restaurants(restaurantAddress);
+        
+        if (restaurantData.googlemap_id === googleMapId) {
+          return restaurantAddress;
         }
       }
+      
+      // If no restaurant is found, return zero address instead of throwing
       return ethers.constants.AddressZero;
+      
     } catch (error) {
       console.error('Error finding restaurant address:', error);
-      return ethers.constants.AddressZero;
+      return ethers.constants.AddressZero; // Return zero address on error
     }
   }
 
@@ -97,7 +123,6 @@ export class RestaurantService {
     amount: ethers.BigNumber
   ): Promise<ethers.ContractTransaction> {
     try {
-      // First get restaurant address
       const restaurantAddress = await this.findRestaurantAddress(googleMapId);
       if (restaurantAddress === ethers.constants.AddressZero) {
         throw new Error('Restaurant not found');
@@ -151,7 +176,6 @@ export class RestaurantService {
   }
 
   private convertRatioToDiscount(ratio: ethers.BigNumber): number {
-    // Convert ratio to percentage (e.g., 0.9 ratio = 10% discount)
     const ratioAsNumber = parseFloat(ethers.utils.formatEther(ratio));
     return (1 - ratioAsNumber) * 100;
   }
@@ -165,11 +189,37 @@ export class RestaurantService {
 
   async registerRestaurant(googleMapId: string): Promise<boolean> {
     try {
-      const tx = await this.paymentContract.registerRestaurant(googleMapId);
-      await tx.wait();
+      console.log("Contract instance:", this.paymentContract);
+      console.log("Attempting to register with ID:", googleMapId);
+      
+      // Check if already registered
+      const isRegistered = await this.isRestaurantRegistered(googleMapId);
+      if (isRegistered) {
+        throw new Error('Restaurant is already registered');
+      }
+
+      // Proceed with registration
+      const tx = await this.paymentContract.registerRestaurant(googleMapId, {
+        gasLimit: 500000
+      });
+      
+      console.log("Transaction sent:", tx.hash);
+      const receipt = await tx.wait();
+      console.log("Registration confirmed in block:", receipt.blockNumber);
+      
+      // Verify registration
+      const verifyRegistration = await this.isRestaurantRegistered(googleMapId);
+      if (!verifyRegistration) {
+        throw new Error('Registration verification failed');
+      }
+      
       return true;
     } catch (error) {
-      console.error('Error registering restaurant:', error);
+      console.error('Registration error details:', {
+        error,
+        contractAddress: this.paymentContract?.address,
+        googleMapId
+      });
       throw error;
     }
   }
