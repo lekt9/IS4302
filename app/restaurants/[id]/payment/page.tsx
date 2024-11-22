@@ -42,7 +42,7 @@ export default function PaymentPage() {
           throw new Error('Wallet not connected');
         }
 
-        const response = await fetch(`/api/restaurants/${id}`);
+        const response = await fetch(`/api/restaurants/${id.split("_")[0]}`);
         if (!response.ok) {
           throw new Error('Failed to fetch restaurant');
         }
