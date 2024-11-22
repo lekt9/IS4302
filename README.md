@@ -2,6 +2,12 @@
 
 A modern web application for restaurant ordering built with Next.js 14, featuring real-time updates, interactive UI, and seamless payment integration.
 
+## 🌟 Demo
+
+Check out our application in action:
+
+https://github.com/lekt9/IS4302/raw/refs/heads/submission/demo.mp4
+
 ## 🌟 Features
 
 - **Restaurant Discovery**: Browse nearby restaurants with real-time availability
