@@ -65,7 +65,7 @@ export default function RestaurantDetailPage() {
           
           console.log('Enhanced restaurant data:', enhancedRestaurant);
           setRestaurant(enhancedRestaurant as RestaurantDetails);
-          setBlockchainData(enhancedRestaurant.blockchainData);
+          setBlockchainData(enhancedRestaurant.blockchainData || null);
         } else {
           setRestaurant(baseData as RestaurantDetails);
           setBlockchainData(null);
@@ -289,3 +289,4 @@ export default function RestaurantDetailPage() {
     </div>
   );
 }
+

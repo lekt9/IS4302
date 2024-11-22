@@ -82,27 +82,54 @@ export default function HomePage() {
     }
   }, []);
 
+
   // useEffect(() => {
   //   const fetchRestaurants = async () => {
   //     try {
-  //       if (!provider || !coordinates) return;
+  //       if (!coordinates) {
+  //         console.log('No coordinates available yet');
+  //         return;
+  //       }
 
-  //       // Get registered restaurants from blockchain
+  //       const storedData = localStorage.getItem('nearbyRestaurants');
+  //       if (!storedData) {
+  //         toast.error('No restaurants data found');
+  //         return;
+  //       }
+
+  //       const { restaurants: localRestaurants } = JSON.parse(storedData);
+  //       console.log('User coordinates:', coordinates); // Debug log
+
+  //       // Calculate distances first
+  //       const restaurantsWithDistance = localRestaurants.map((restaurant: any) => {
+  //         const distance = calculateDistance(
+  //           coordinates.lat,
+  //           coordinates.lng,
+  //           restaurant.location.lat,
+  //           restaurant.location.lng
+  //         );
+  //         console.log(`Distance for ${restaurant.name}:`, distance); // Debug log
+  //         return { ...restaurant, distance };
+  //       });
+
+  //       if (!provider) {
+  //         // Use restaurantsWithDistance instead of localRestaurants
+  //         setRestaurants(restaurantsWithDistance.map((restaurant: any) => ({
+  //           ...restaurant,
+  //           blockchainData: {
+  //             isRegistered: false,
+  //             address: '',
+  //             discountRate: 0
+  //           }
+  //         })));
+  //         return;
+  //       }
+
   //       const blockchainService = new BlockchainService(provider);
   //       const registeredRestaurants = await blockchainService.getRegisteredRestaurants();
         
-  //       // Get restaurant details from API
-  //       const response = await fetch(
-  //         `/api/restaurants?lat=${coordinates.lat}&lng=${coordinates.lng}&placeIds=${
-  //           registeredRestaurants.map(r => r.id).join(',')
-  //         }`
-  //       );
-        
-  //       if (!response.ok) throw new Error('Failed to fetch restaurants');
-  //       const apiRestaurants = await response.json();
-        
-  //       // Merge blockchain data with API data
-  //       const mergedRestaurants = apiRestaurants.map((restaurant: any) => {
+  //       // Use restaurantsWithDistance instead of localRestaurants
+  //       const mergedRestaurants = restaurantsWithDistance.map((restaurant: any) => {
   //         const blockchainData = registeredRestaurants.find(r => r.id === restaurant.id);
   //         return {
   //           ...restaurant,
@@ -120,7 +147,7 @@ export default function HomePage() {
 
   //       setRestaurants(mergedRestaurants);
   //     } catch (error) {
-  //       console.error('Error fetching restaurants:', error);
+  //       console.error('Error processing restaurants:', error);
   //       toast.error('Failed to load restaurants');
   //     } finally {
   //       setLoading(false);
@@ -128,73 +155,75 @@ export default function HomePage() {
   //   };
 
   //   fetchRestaurants();
-  // }, [provider, coordinates]); // Added coordinates as dependency
+  // }, [provider, coordinates]); // Make sure coordinates is in dependencies
+
+  // ... existing imports and interfaces remain the same ...
 
   useEffect(() => {
     const fetchRestaurants = async () => {
       try {
-        if (!coordinates) {
-          console.log('No coordinates available yet');
+        if (!coordinates || !provider) {
+          console.log('Missing dependencies:', { coordinates, provider });
           return;
         }
 
-        const storedData = localStorage.getItem('nearbyRestaurants');
-        if (!storedData) {
-          toast.error('No restaurants data found');
-          return;
-        }
-
-        const { restaurants: localRestaurants } = JSON.parse(storedData);
-        console.log('User coordinates:', coordinates); // Debug log
-
-        // Calculate distances first
-        const restaurantsWithDistance = localRestaurants.map((restaurant: any) => {
-          const distance = calculateDistance(
-            coordinates.lat,
-            coordinates.lng,
-            restaurant.location.lat,
-            restaurant.location.lng
-          );
-          console.log(`Distance for ${restaurant.name}:`, distance); // Debug log
-          return { ...restaurant, distance };
-        });
-
-        if (!provider) {
-          // Use restaurantsWithDistance instead of localRestaurants
-          setRestaurants(restaurantsWithDistance.map((restaurant: any) => ({
-            ...restaurant,
-            blockchainData: {
-              isRegistered: false,
-              address: '',
-              discountRate: 0
-            }
-          })));
-          return;
-        }
-
+        setLoading(true);
+        
+        // 1. Fetch from blockchain first
         const blockchainService = new BlockchainService(provider);
         const registeredRestaurants = await blockchainService.getRegisteredRestaurants();
+        console.log('Registered restaurants from blockchain:', registeredRestaurants);
         
-        // Use restaurantsWithDistance instead of localRestaurants
-        const mergedRestaurants = restaurantsWithDistance.map((restaurant: any) => {
-          const blockchainData = registeredRestaurants.find(r => r.id === restaurant.id);
-          return {
-            ...restaurant,
-            blockchainData: blockchainData ? {
-              isRegistered: true,
-              address: blockchainData.contractData.owner,
-              discountRate: parseFloat(blockchainData.contractData.discountRate)
-            } : {
-              isRegistered: false,
-              address: '',
-              discountRate: 0
+        if (!registeredRestaurants || registeredRestaurants.length === 0) {
+          console.log('No restaurants found in blockchain');
+          setRestaurants([]);
+          return;
+        }
+
+        // 2. Get details for each registered restaurant
+        const restaurantPromises = registeredRestaurants.map(async (blockchainRest) => {
+          console.log('Fetching details for restaurant:', blockchainRest.id);
+          try {
+            const response = await fetch(`/api/restaurants/${blockchainRest.id}`);
+            if (!response.ok) {
+              console.error(`API error for ${blockchainRest.id}:`, response.status);
+              return null;
             }
-          };
+            const restaurantData = await response.json();
+            console.log('Restaurant data from API:', restaurantData);
+
+            return {
+              ...restaurantData,
+              distance: calculateDistance(
+                coordinates.lat,
+                coordinates.lng,
+                restaurantData.location.lat,
+                restaurantData.location.lng
+              ),
+              blockchainData: {
+                isRegistered: true,
+                address: blockchainRest.contractData.owner,
+                discountRate: parseFloat(blockchainRest.contractData.discountRate)
+              }
+            };
+          } catch (error) {
+            console.error(`Error fetching restaurant ${blockchainRest.id}:`, error);
+            return null;
+          }
         });
 
-        setRestaurants(mergedRestaurants);
+        const allRestaurants = (await Promise.all(restaurantPromises))
+          .filter(restaurant => restaurant !== null);
+        
+        console.log('Final processed restaurants:', allRestaurants);
+
+        const sortedRestaurants = allRestaurants.sort((a, b) => 
+          b.blockchainData.discountRate - a.blockchainData.discountRate
+        );
+
+        setRestaurants(sortedRestaurants);
       } catch (error) {
-        console.error('Error processing restaurants:', error);
+        console.error('Error in fetchRestaurants:', error);
         toast.error('Failed to load restaurants');
       } finally {
         setLoading(false);
@@ -202,7 +231,9 @@ export default function HomePage() {
     };
 
     fetchRestaurants();
-  }, [provider, coordinates]); // Make sure coordinates is in dependencies
+  }, [provider, coordinates]);
+
+  // ... rest of the component remains the same ...
 
   const getPhotoUrl = (photoReference: string) => {
     return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photoReference}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`;
