@@ -60,10 +60,9 @@ export class RestaurantService {
             };
           }
 
-          const [ratio, volume] = await Promise.all([
-            this.paymentContract._calculateCustomRatio(restaurantAddress),
-            this.getRestaurantVolume(restaurantAddress)
-          ]);
+          const ratio = await this.paymentContract._calculateCustomRatio(restaurantAddress);
+          
+          const volume = await this.getRestaurantVolume(restaurantAddress);
 
           const enhancedData = {
             ...restaurant,
@@ -89,32 +88,18 @@ export class RestaurantService {
     try {
       console.log('Finding restaurant address for:', googleMapId);
       
-      const filter = this.paymentContract.filters.RestaurantRegistered();
-      const events = await this.paymentContract.queryFilter(filter);
+      const restaurantAddress = await this.paymentContract.getRestaurantAddressByGoogleMapId(googleMapId);
+      console.log('Restaurant address found:', restaurantAddress);
       
-      for (const event of events) {
-        if (!event.args) continue;
-        const restaurantAddress = event.args.restaurantAddress;
-        
-        // Validate the address before using it
-        if (!ethers.utils.isAddress(restaurantAddress)) {
-          console.warn('Invalid address found:', restaurantAddress);
-          continue;
-        }
-        
-        const restaurantData = await this.paymentContract.restaurants(restaurantAddress);
-        
-        if (restaurantData.googlemap_id === googleMapId) {
-          return restaurantAddress;
-        }
+      if (!ethers.utils.isAddress(restaurantAddress)) {
+        console.warn('Invalid address found:', restaurantAddress);
+        return ethers.constants.AddressZero;
       }
       
-      // If no restaurant is found, return zero address instead of throwing
-      return ethers.constants.AddressZero;
-      
+      return restaurantAddress;
     } catch (error) {
       console.error('Error finding restaurant address:', error);
-      return ethers.constants.AddressZero; // Return zero address on error
+      return ethers.constants.AddressZero;
     }
   }
 
@@ -123,21 +108,14 @@ export class RestaurantService {
     amount: ethers.BigNumber
   ): Promise<ethers.ContractTransaction> {
     try {
-      const restaurantAddress = await this.findRestaurantAddress(googleMapId);
-      if (restaurantAddress === ethers.constants.AddressZero) {
-        throw new Error('Restaurant not found');
-      }
-
-      // Approve USDT spending
       const approvalTx = await this.usdtContract.approve(
         this.paymentContract.address,
         amount
       );
       await approvalTx.wait();
-  
-      // Use pay function with found address
-      return await this.paymentContract.pay(
-        restaurantAddress,
+
+      return await this.paymentContract.payByGoogleMapId(
+        googleMapId,
         amount,
         {
           gasLimit: 300000
@@ -161,14 +139,8 @@ export class RestaurantService {
 
   private async getRestaurantVolume(restaurantAddress: string): Promise<ethers.BigNumber> {
     try {
-      const volumes = await this.paymentContract.restaurantVolumes(restaurantAddress);
-      let total = ethers.BigNumber.from(0);
-      for (const volume of volumes) {
-        if (volume && volume.amount) {
-          total = total.add(volume.amount);
-        }
-      }
-      return total;
+      const ratio = await this.paymentContract._calculateCustomRatio(restaurantAddress);
+      return ethers.BigNumber.from(ratio);
     } catch (error) {
       console.error('Error getting restaurant volume:', error);
       return ethers.BigNumber.from(0);
@@ -176,14 +148,14 @@ export class RestaurantService {
   }
 
   private convertRatioToDiscount(ratio: ethers.BigNumber): number {
-    const ratioAsNumber = parseFloat(ethers.utils.formatEther(ratio));
+    const ratioAsNumber = parseFloat(ethers.utils.formatUnits(ratio, 18));
     return (1 - ratioAsNumber) * 100;
   }
 
   private calculateTrafficLevel(volume: ethers.BigNumber): TrafficLevel {
-    const volumeNum = volume.toNumber();
-    if (volumeNum < 5) return 'Low';
-    if (volumeNum < 10) return 'Medium';
+    const volumeNum = Number(ethers.utils.formatUnits(volume, 18));
+    if (volumeNum < 0.5) return 'Low';
+    if (volumeNum < 0.8) return 'Medium';
     return 'High';
   }
 
@@ -192,13 +164,11 @@ export class RestaurantService {
       console.log("Contract instance:", this.paymentContract);
       console.log("Attempting to register with ID:", googleMapId);
       
-      // Check if already registered
       const isRegistered = await this.isRestaurantRegistered(googleMapId);
       if (isRegistered) {
         throw new Error('Restaurant is already registered');
       }
 
-      // Proceed with registration
       const tx = await this.paymentContract.registerRestaurant(googleMapId, {
         gasLimit: 500000
       });
@@ -207,7 +177,6 @@ export class RestaurantService {
       const receipt = await tx.wait();
       console.log("Registration confirmed in block:", receipt.blockNumber);
       
-      // Verify registration
       const verifyRegistration = await this.isRestaurantRegistered(googleMapId);
       if (!verifyRegistration) {
         throw new Error('Registration verification failed');

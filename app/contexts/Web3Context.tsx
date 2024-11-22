@@ -1,8 +1,8 @@
 'use client';
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { ethers } from 'ethers';
-import PaymentContractABI from '../contracts/PaymentContract.json';
-import MockUSDTABI from '../contracts/MockUSDT.json';
+import PaymentContractABI from '../../smartcontract/build/contracts/PaymentContract.json';
+import MockUSDTABI from '../../smartcontract/build/contracts/MockUSDT.json';
 import toast from 'react-hot-toast';
 
 declare global {
@@ -20,6 +20,12 @@ interface Web3ContextType {
   connectWallet: () => Promise<void>;
   isConnected: boolean;
   balance: string;
+  registerRestaurant: (googleMapId: string) => Promise<void>;
+  payByGoogleMapId: (googleMapId: string, amount: string) => Promise<void>;
+  getRestaurantAddressByGoogleMapId: (googleMapId: string) => Promise<string>;
+  getRestaurantsByRatio: () => Promise<string[]>;
+  redeemBalance: () => Promise<void>;
+  calculateCustomRatio: (restaurantAddress: string) => Promise<string>;
 }
 
 const Web3Context = createContext<Web3ContextType>({
@@ -30,7 +36,13 @@ const Web3Context = createContext<Web3ContextType>({
   account: '',
   connectWallet: async () => {},
   isConnected: false,
-  balance: '0'
+  balance: '0',
+  registerRestaurant: async () => {},
+  payByGoogleMapId: async () => {},
+  getRestaurantAddressByGoogleMapId: async () => '',
+  getRestaurantsByRatio: async () => [],
+  redeemBalance: async () => {},
+  calculateCustomRatio: async () => '0',
 });
 
 export function Web3Provider({ children }: { children: ReactNode }) {
@@ -98,13 +110,13 @@ export function Web3Provider({ children }: { children: ReactNode }) {
     try {
       const payment = new ethers.Contract(
         PAYMENT_CONTRACT_ADDRESS!,
-        PaymentContractABI,
+        PaymentContractABI.abi,
         web3Signer
       );
       
       const usdt = new ethers.Contract(
         USDT_CONTRACT_ADDRESS!,
-        MockUSDTABI,
+        MockUSDTABI.abi,
         web3Signer
       );
 
@@ -122,7 +134,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
     try {
       const usdt = new ethers.Contract(
         USDT_CONTRACT_ADDRESS,
-        MockUSDTABI,
+        MockUSDTABI.abi,
         provider
       );
       const balance = await usdt.balanceOf(address);
@@ -165,6 +177,111 @@ export function Web3Provider({ children }: { children: ReactNode }) {
     }
   };
 
+  const registerRestaurant = async (googleMapId: string) => {
+    if (!paymentContract || !account) {
+      toast.error('Please connect your wallet first');
+      return;
+    }
+
+    try {
+      const tx = await paymentContract.registerRestaurant(googleMapId);
+      await tx.wait();
+      toast.success('Restaurant registered successfully!');
+    } catch (error: any) {
+      console.error('Error registering restaurant:', error);
+      toast.error(error.reason || 'Failed to register restaurant');
+    }
+  };
+
+  const payByGoogleMapId = async (googleMapId: string, amount: string) => {
+    if (!paymentContract || !usdtContract || !account) {
+      toast.error('Please connect your wallet first');
+      return;
+    }
+
+    try {
+      // Convert amount to USDT units (6 decimals)
+      const amountInWei = ethers.utils.parseUnits(amount, 6);
+      
+      // First approve the payment contract to spend USDT
+      const approveTx = await usdtContract.approve(PAYMENT_CONTRACT_ADDRESS, amountInWei);
+      await approveTx.wait();
+      
+      // Then make the payment
+      const payTx = await paymentContract.payByGoogleMapId(googleMapId, amountInWei);
+      await payTx.wait();
+      
+      // Update balance after payment
+      await updateBalance(account, provider!);
+      toast.success('Payment processed successfully!');
+    } catch (error: any) {
+      console.error('Error processing payment:', error);
+      toast.error(error.reason || 'Failed to process payment');
+    }
+  };
+
+  const getRestaurantAddressByGoogleMapId = async (googleMapId: string): Promise<string> => {
+    if (!paymentContract) {
+      toast.error('Contract not initialized');
+      return '';
+    }
+
+    try {
+      const address = await paymentContract.getRestaurantAddressByGoogleMapId(googleMapId);
+      return address;
+    } catch (error) {
+      console.error('Error getting restaurant address:', error);
+      throw error;
+    }
+  };
+
+  const getRestaurantsByRatio = async (): Promise<string[]> => {
+    if (!paymentContract) {
+      toast.error('Contract not initialized');
+      return [];
+    }
+
+    try {
+      const restaurants = await paymentContract.getRestaurantsByRatio();
+      return restaurants;
+    } catch (error) {
+      console.error('Error getting restaurants:', error);
+      throw error;
+    }
+  };
+
+  const redeemBalance = async () => {
+    if (!paymentContract || !account) {
+      toast.error('Please connect your wallet first');
+      return;
+    }
+
+    try {
+      const tx = await paymentContract.redeem();
+      await tx.wait();
+      await updateBalance(account, provider!);
+      toast.success('Balance redeemed successfully!');
+    } catch (error: any) {
+      console.error('Error redeeming balance:', error);
+      toast.error(error.reason || 'Failed to redeem balance');
+    }
+  };
+
+  const calculateCustomRatio = async (restaurantAddress: string): Promise<string> => {
+    if (!paymentContract) {
+      toast.error('Contract not initialized');
+      return '0';
+    }
+
+    try {
+      const ratio = await paymentContract._calculateCustomRatio(restaurantAddress);
+      return ethers.utils.formatUnits(ratio, 18); // The ratio is in 18 decimals
+    } catch (error) {
+      console.error('Error calculating custom ratio:', error);
+      throw error;
+    }
+  };
+
   const value = {
     provider,
     signer,
@@ -173,7 +290,13 @@ export function Web3Provider({ children }: { children: ReactNode }) {
     account,
     connectWallet,
     isConnected,
-    balance
+    balance,
+    registerRestaurant,
+    payByGoogleMapId,
+    getRestaurantAddressByGoogleMapId,
+    getRestaurantsByRatio,
+    redeemBalance,
+    calculateCustomRatio,
   };
 
   return (

@@ -64,18 +64,8 @@ export default function RestaurantDetailPage() {
           const [enhancedRestaurant] = await restaurantService.enhanceWithBlockchainData([baseData]);
           
           console.log('Enhanced restaurant data:', enhancedRestaurant);
-          
-          if (enhancedRestaurant.blockchainData?.address.toLowerCase() === contractAddress.toLowerCase()) {
-            setRestaurant(enhancedRestaurant as RestaurantDetails);
-            setBlockchainData(enhancedRestaurant.blockchainData);
-          } else {
-            console.log('Address mismatch:', {
-              enhanced: enhancedRestaurant.blockchainData?.address,
-              contract: contractAddress
-            });
-            setRestaurant(baseData as RestaurantDetails);
-            setBlockchainData(null);
-          }
+          setRestaurant(enhancedRestaurant as RestaurantDetails);
+          setBlockchainData(enhancedRestaurant.blockchainData);
         } else {
           setRestaurant(baseData as RestaurantDetails);
           setBlockchainData(null);
